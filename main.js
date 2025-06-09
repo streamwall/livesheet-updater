@@ -3,20 +3,20 @@ import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { GoogleAuth } from 'google-auth-library';
 import fs from 'fs/promises';
 
-// 🧾 Config
+// 🗞 Config
 const SHEET_ID = '1amkWpZu5hmI50XGINiz7-02XVNTTZoEARWEVRM-pvKo';
 const SHEET_NAME = 'Livesheet';
-const RATE_LIVE = 2 * 60 * 1000;      // was 3 mins → now 2
-const RATE_OFF = 7 * 60 * 1000;       // was 10 mins → now 7
+const RATE_LIVE = 2 * 60 * 1000;
+const RATE_OFF = 7 * 60 * 1000;
 
-const PAGE_WAIT_MIN = 6000;           // was 8000
-const PAGE_WAIT_MAX = 9000;           // was 12000
+const PAGE_WAIT_MIN = 6000;
+const PAGE_WAIT_MAX = 12000;
 
-const BETWEEN_ROW_DELAY_MIN = 7000;   // was 10000
-const BETWEEN_ROW_DELAY_MAX = 12500;  // was 18000
+const BETWEEN_ROW_DELAY_MIN = 5000;
+const BETWEEN_ROW_DELAY_MAX = 9000;
 
-const LOOP_DELAY_MIN = 60000;         // was 85000
-const LOOP_DELAY_MAX = 80000;         // was 110000
+const LOOP_DELAY_MIN = 40000;
+const LOOP_DELAY_MAX = 60000;
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 const VIEWPORT = { width: 1280, height: 800 };
@@ -25,7 +25,7 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 const rand = (min, max) => delay(min + Math.random() * (max - min));
 const log = (...args) => console.log(new Date().toISOString(), ...args);
 
-// 📋 Google Sheets setup
+// 📜 Google Sheets setup
 const CREDS = JSON.parse(await fs.readFile('./creds.json', 'utf8'));
 const auth = new GoogleAuth({
   credentials: CREDS,
@@ -37,10 +37,9 @@ await doc.loadInfo();
 
 const sheet = doc.sheetsByTitle[SHEET_NAME];
 if (!sheet) throw new Error(`Sheet "${SHEET_NAME}" not found`);
-await sheet.getRows({ limit: 1 }); // force-load headers
+await sheet.getRows({ limit: 1 });
 log(`Loaded sheet "${sheet.title}", headers:`, JSON.stringify(sheet.headerValues));
 
-// 🔎 Field helpers
 function getField(row, name) {
   const idx = sheet.headerValues.findIndex(h => h.toLowerCase() === name.toLowerCase());
   return idx >= 0 ? row._rawData[idx] : undefined;
@@ -50,7 +49,6 @@ function setField(row, name, val) {
   if (idx >= 0) row._rawData[idx] = val;
 }
 
-// 🚦 Status checker
 async function checkStatus(page, row, i) {
   const url = getField(row, 'Link')?.trim();
   const isValidLiveUrl = url && /^https:\/\/.*\.tiktok\.com\/.+\/live(\?.*)?$/.test(url);
@@ -74,14 +72,12 @@ async function checkStatus(page, row, i) {
   log(`[${i}] Visiting ${baseUrl}`);
   try {
     await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
     const finalUrl = page.url();
     if (finalUrl.includes('/?_r=1')) {
       log(`[${i}] Redirected to TikTok homepage (offline): ${url}`);
       await updateRowByLink(url, 'Offline');
       return;
     }
-
     await rand(PAGE_WAIT_MIN, PAGE_WAIT_MAX);
   } catch (e) {
     log(`[${i}] Navigation error:`, e.message);
@@ -105,7 +101,6 @@ async function checkStatus(page, row, i) {
   await rand(BETWEEN_ROW_DELAY_MIN, BETWEEN_ROW_DELAY_MAX);
 }
 
-// 🛡️ Safe update by matching link
 async function updateRowByLink(linkUrl, status) {
   try {
     const rows = await sheet.getRows();
@@ -114,12 +109,15 @@ async function updateRowByLink(linkUrl, status) {
       log(`[updateRowByLink] No row found for link: ${linkUrl}`);
       return;
     }
-
     const nowIso = new Date().toISOString();
     setField(row, 'Status', status);
     setField(row, 'Last Checked (PST)', nowIso);
     if (status === 'Live') {
       setField(row, 'Last Live (PST)', nowIso);
+    }
+    const addedDate = getField(row, 'Added Date');
+    if (!addedDate) {
+      setField(row, 'Added Date', nowIso);
     }
     await row.save();
     log(`[updateRowByLink] Updated: ${linkUrl} => ${status}`);
@@ -128,7 +126,6 @@ async function updateRowByLink(linkUrl, status) {
   }
 }
 
-// 🔁 Main loop
 async function main() {
   log(`Using UA: ${USER_AGENT}`);
 
@@ -142,7 +139,6 @@ async function main() {
     }
   );
 
-  // 🥠 Inject cookies if present
   try {
     const cookies = JSON.parse(await fs.readFile('./cookies.json', 'utf8'));
     await context.addCookies(cookies);
@@ -157,11 +153,23 @@ async function main() {
     const rows = await sheet.getRows();
     log('Cycle start —', rows.length, 'rows fetched');
 
-    if (rows.length > 0) {
-      log('Sample row0:', sheet.headerValues.map((h, idx) => `${h}=${rows[0]._rawData[idx]}`).join('; '));
+    const now = Date.now();
+    const prioritized = rows.map((row, i) => ({ row, i })).sort((a, b) => {
+      const getPriority = r => {
+        if (!getField(r, 'Last Checked (PST)')) return 3;
+        if (getField(r, 'Status')?.toLowerCase() === 'live') return 2;
+        const lastLive = getField(r, 'Last Live (PST)');
+        if (lastLive && now - new Date(lastLive).getTime() <= 20 * 60 * 1000) return 1;
+        return 0;
+      };
+      return getPriority(b.row) - getPriority(a.row);
+    });
+
+    if (prioritized.length > 0) {
+      log('Sample prioritized row:', sheet.headerValues.map((h, idx) => `${h}=${prioritized[0].row._rawData[idx]}`).join('; '));
     }
 
-    for (const [i, row] of rows.sort(() => 0.5 - Math.random()).entries()) {
+    for (const { row, i } of prioritized) {
       await checkStatus(page, row, i);
     }
 
