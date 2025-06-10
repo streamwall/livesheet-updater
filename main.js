@@ -1,6 +1,6 @@
-import { GoogleSpreadsheet } from 'google-spreadsheet';
-import { GoogleAuth } from 'google-auth-library';
 import fs from 'fs/promises';
+import { GoogleAuth } from 'google-auth-library';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
 
 // 🗞 Config
 const SHEET_ID = '1amkWpZu5hmI50XGINiz7-02XVNTTZoEARWEVRM-pvKo';
@@ -40,6 +40,9 @@ function setField(row, name, val) {
   const idx = sheet.headerValues.findIndex(h => h.toLowerCase() === name.toLowerCase());
   if (idx >= 0) row._rawData[idx] = val;
 }
+
+// Store updates to batch them
+const pendingUpdates = new Map();
 
 async function checkStatus(row, i) {
   const url = getField(row, 'Link')?.trim();
@@ -85,35 +88,81 @@ async function checkStatus(row, i) {
     const status = html.includes('"isLiveBroadcast":true') ? 'Live' : 'Offline';
     
     log(`[${i}] Status: ${status} for ${baseUrl}`);
-    await updateRowByLink(url, status);
+    
+    // Store update for batching
+    pendingUpdates.set(url, { row, status, index: i });
     
   } catch (e) {
     log(`[${i}] Request error:`, e.message);
   }
 }
 
-async function updateRowByLink(linkUrl, status) {
+async function batchUpdateRows(cycleStartTime) {
+  if (pendingUpdates.size === 0) return;
+  
+  log(`Preparing batch update for ${pendingUpdates.size} rows...`);
+  const nowIso = new Date().toISOString();
+  
   try {
-    const rows = await sheet.getRows();
-    const row = rows.find(r => getField(r, 'Link')?.trim() === linkUrl);
-    if (!row) {
-      log(`[updateRowByLink] No row found for link: ${linkUrl}`);
-      return;
+    // Get fresh data to avoid race conditions
+    log('Fetching fresh sheet data before update...');
+    const freshRows = await sheet.getRows();
+    
+    // Create a map for quick lookup
+    const freshRowMap = new Map();
+    for (const row of freshRows) {
+      const url = getField(row, 'Link')?.trim();
+      if (url) freshRowMap.set(url, row);
     }
-    const nowIso = new Date().toISOString();
-    setField(row, 'Status', status);
-    setField(row, 'Last Checked (PST)', nowIso);
-    if (status === 'Live') {
-      setField(row, 'Last Live (PST)', nowIso);
+    
+    let updatedCount = 0;
+    let skippedCount = 0;
+    
+    // Process each pending update
+    for (const [url, { status }] of pendingUpdates) {
+      const freshRow = freshRowMap.get(url);
+      
+      if (!freshRow) {
+        log(`Row deleted by user, skipping: ${url}`);
+        skippedCount++;
+        continue;
+      }
+      
+      // Check if someone else updated it more recently
+      const freshLastChecked = getField(freshRow, 'Last Checked (PST)');
+      if (freshLastChecked && new Date(freshLastChecked).getTime() > cycleStartTime) {
+        log(`Row updated by another process, skipping: ${url}`);
+        skippedCount++;
+        continue;
+      }
+      
+      // Apply our updates to the fresh row
+      setField(freshRow, 'Status', status);
+      setField(freshRow, 'Last Checked (PST)', nowIso);
+      if (status === 'Live') {
+        setField(freshRow, 'Last Live (PST)', nowIso);
+      }
+      const addedDate = getField(freshRow, 'Added Date');
+      if (!addedDate) {
+        setField(freshRow, 'Added Date', nowIso);
+      }
+      
+      updatedCount++;
     }
-    const addedDate = getField(row, 'Added Date');
-    if (!addedDate) {
-      setField(row, 'Added Date', nowIso);
+    
+    // Save all updates at once
+    if (updatedCount > 0) {
+      await sheet.saveUpdatedCells();
+      log(`Batch update complete: ${updatedCount} rows updated, ${skippedCount} skipped`);
+    } else {
+      log(`No rows to update (all were deleted or modified)`);
     }
-    await row.save();
-    log(`[updateRowByLink] Updated: ${linkUrl} => ${status}`);
+    
+    pendingUpdates.clear();
+    
   } catch (e) {
-    log(`[updateRowByLink] Error updating row for ${linkUrl}:`, e.message);
+    log(`Batch update error:`, e.message);
+    pendingUpdates.clear();
   }
 }
 
@@ -121,32 +170,46 @@ async function main() {
   log(`TikTok Live Checker started`);
 
   while (true) {
-    const rows = await sheet.getRows();
-    log('Cycle start —', rows.length, 'rows fetched');
+    try {
+      // Record cycle start time for race condition detection
+      const cycleStartTime = Date.now();
+      
+      // Single read per cycle
+      const rows = await sheet.getRows();
+      log('Cycle start —', rows.length, 'rows fetched');
 
-    const now = Date.now();
-    const prioritized = rows.map((row, i) => ({ row, i })).sort((a, b) => {
-      const getPriority = r => {
-        if (!getField(r, 'Last Checked (PST)')) return 3;
-        if (getField(r, 'Status')?.toLowerCase() === 'live') return 2;
-        const lastLive = getField(r, 'Last Live (PST)');
-        if (lastLive && now - new Date(lastLive).getTime() <= 20 * 60 * 1000) return 1;
-        return 0;
-      };
-      return getPriority(b.row) - getPriority(a.row);
-    });
+      const now = Date.now();
+      const prioritized = rows.map((row, i) => ({ row, i })).sort((a, b) => {
+        const getPriority = r => {
+          if (!getField(r, 'Last Checked (PST)')) return 3;
+          if (getField(r, 'Status')?.toLowerCase() === 'live') return 2;
+          const lastLive = getField(r, 'Last Live (PST)');
+          if (lastLive && now - new Date(lastLive).getTime() <= 20 * 60 * 1000) return 1;
+          return 0;
+        };
+        return getPriority(b.row) - getPriority(a.row);
+      });
 
-    if (prioritized.length > 0) {
-      log('Sample prioritized row:', sheet.headerValues.map((h, idx) => `${h}=${prioritized[0].row._rawData[idx]}`).join('; '));
+      if (prioritized.length > 0) {
+        log('Sample prioritized row:', sheet.headerValues.map((h, idx) => `${h}=${prioritized[0].row._rawData[idx]}`).join('; '));
+      }
+
+      // Check all streams
+      for (const { row, i } of prioritized) {
+        await checkStatus(row, i);
+      }
+
+      // Batch update all pending changes with race condition protection
+      await batchUpdateRows(cycleStartTime);
+
+      const sleepTime = LOOP_DELAY_MIN + Math.random() * (LOOP_DELAY_MAX - LOOP_DELAY_MIN);
+      log(`Cycle complete — sleeping ${(sleepTime / 1000).toFixed(0)}s`);
+      await delay(sleepTime);
+      
+    } catch (e) {
+      log('Main loop error:', e.message);
+      await delay(30000); // Wait 30s on error
     }
-
-    for (const { row, i } of prioritized) {
-      await checkStatus(row, i);
-    }
-
-    const sleepTime = LOOP_DELAY_MIN + Math.random() * (LOOP_DELAY_MAX - LOOP_DELAY_MIN);
-    log(`Cycle complete — sleeping ${(sleepTime / 1000).toFixed(0)}s`);
-    await delay(sleepTime);
   }
 }
 
