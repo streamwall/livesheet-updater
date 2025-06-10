@@ -89,6 +89,21 @@ docker run -it --rm \
   tiktok-checker
 ```
 
+### Docker Compose (Recommended)
+```shell
+docker-compose up -d
+```
+
+To view logs:
+```shell
+docker-compose logs -f
+```
+
+To stop:
+```shell
+docker-compose down
+```
+
 ### ✅ Notes:
 - The app runs in a loop and respects rate limits:
   - Live feeds checked every ~2 minutes
