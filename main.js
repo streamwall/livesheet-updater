@@ -8,14 +8,17 @@ const SHEET_NAME = 'Livesheet';
 const RATE_LIVE = 2 * 60 * 1000;
 const RATE_OFF = 7 * 60 * 1000;
 
-const LOOP_DELAY_MIN = 40000;
-const LOOP_DELAY_MAX = 60000;
+const LOOP_DELAY_MIN = 10000;
+const LOOP_DELAY_MAX = 20000;
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 const rand = (min, max) => delay(min + Math.random() * (max - min));
 const log = (...args) => console.log(new Date().toISOString(), ...args);
+const debug = (...args) => {
+  if (process.env.DEBUG) console.log(new Date().toISOString(), '[DEBUG]', ...args);
+};
 
 // 📜 Google Sheets setup
 const CREDS = JSON.parse(await fs.readFile('./creds.json', 'utf8'));
@@ -32,13 +35,42 @@ if (!sheet) throw new Error(`Sheet "${SHEET_NAME}" not found`);
 await sheet.getRows({ limit: 1 });
 log(`Loaded sheet "${sheet.title}", headers:`, JSON.stringify(sheet.headerValues));
 
+// Helper functions to work with case-insensitive column names
 function getField(row, name) {
-  const idx = sheet.headerValues.findIndex(h => h.toLowerCase() === name.toLowerCase());
-  return idx >= 0 ? row._rawData[idx] : undefined;
+  // Try exact match first
+  if (row.get(name) !== undefined) {
+    return row.get(name);
+  }
+  
+  // Try case-insensitive match
+  const actualColumnName = sheet.headerValues.find(h => h.toLowerCase() === name.toLowerCase());
+  if (actualColumnName) {
+    return row.get(actualColumnName);
+  }
+  
+  // Debug if not found
+  if (name.includes('Date')) {
+    debug(`getField: Column '${name}' not found. Available columns: ${sheet.headerValues.join(', ')}`);
+  }
+  return undefined;
 }
+
 function setField(row, name, val) {
-  const idx = sheet.headerValues.findIndex(h => h.toLowerCase() === name.toLowerCase());
-  if (idx >= 0) row._rawData[idx] = val;
+  // Try exact match first
+  try {
+    row.set(name, val);
+    return;
+  } catch (e) {
+    // Continue to case-insensitive match
+  }
+  
+  // Try case-insensitive match
+  const actualColumnName = sheet.headerValues.find(h => h.toLowerCase() === name.toLowerCase());
+  if (actualColumnName) {
+    row.set(actualColumnName, val);
+  } else {
+    debug(`setField: Failed to set '${name}' = '${val}'. Column not found. Available: ${sheet.headerValues.join(', ')}`);
+  }
 }
 
 // Store updates to batch them
@@ -47,30 +79,25 @@ const pendingUpdates = new Map();
 async function checkStatus(row, i) {
   const rawUrl = getField(row, 'Link');
   
-  // Comprehensive debugging
-  console.log(`\n[${i}] ===== URL PROCESSING DEBUG =====`);
-  console.log(`[${i}] 1. Raw from sheet: ${JSON.stringify(rawUrl)}`);
-  
+  // URL processing
   if (!rawUrl) {
-    console.log(`[${i}] 2. Skipping - no URL`);
     return;
   }
   
-  // Step 2: Initial trim
+  // Clean and validate URL
   let url = rawUrl.trim();
-  console.log(`[${i}] 2. After trim: ${JSON.stringify(url)}`);
-  console.log(`[${i}]    Length: ${url.length}`);
-  console.log(`[${i}]    Char codes of last 5 chars: ${Array.from(url.slice(-5)).map(c => c.charCodeAt(0))}`);
-  
-  // Step 3: Clean non-ASCII
   const beforeClean = url;
+  
+  // Remove all non-printable and non-ASCII characters
   url = url.replace(/[^\x20-\x7E]/g, '');
-  console.log(`[${i}] 3. After cleaning: ${JSON.stringify(url)}`);
+  // Also specifically remove zero-width characters
+  url = url.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '');
+  
   if (beforeClean !== url) {
-    console.log(`[${i}]    Removed: ${Array.from(beforeClean).filter(c => c.charCodeAt(0) > 127).map(c => `U+${c.charCodeAt(0).toString(16).toUpperCase()}`)}`);
+    debug(`[${i}] Cleaned URL from: ${JSON.stringify(beforeClean)} to: ${JSON.stringify(url)}`);
   }
   
-  // Step 4: Check each validation pattern
+  // Validate URL patterns
   const patterns = {
     tiktok: /^https:\/\/.*\.tiktok\.com\/.+\/live(\?.*)?$/,
     youtubeWatch: /^https:\/\/(www\.)?youtube\.com\/watch\?v=.+/,
@@ -79,37 +106,12 @@ async function checkStatus(row, i) {
     twitch: /^https:\/\/(www\.)?twitch\.tv\/.+/
   };
   
-  console.log(`[${i}] 4. Pattern matching:`);
-  for (const [name, pattern] of Object.entries(patterns)) {
-    const matches = pattern.test(url);
-    console.log(`[${i}]    ${name}: ${matches}`);
-    if (matches && name.includes('youtube')) {
-      console.log(`[${i}]    Pattern: ${pattern}`);
-      console.log(`[${i}]    URL: ${url}`);
-    }
-  }
-  
-  // Step 5: Show validation result
   const isValidLiveUrl = url && Object.values(patterns).some(p => p.test(url));
-  console.log(`[${i}] 5. Valid URL: ${isValidLiveUrl}`);
-  
-  // Step 6: Additional YouTube debugging
-  if (url.includes('youtube.com')) {
-    console.log(`[${i}] 6. YouTube URL analysis:`);
-    console.log(`[${i}]    Contains 'watch': ${url.includes('watch')}`);
-    console.log(`[${i}]    Contains '?v=': ${url.includes('?v=')}`);
-    console.log(`[${i}]    Index of '?v=': ${url.indexOf('?v=')}`);
-    console.log(`[${i}]    URL structure: ${url.split('?')[0]} | ${url.split('?')[1] || 'NO PARAMS'}`);
-  }
   
   if (!isValidLiveUrl) {
-    console.log(`[${i}] 7. SKIPPING - Invalid URL`);
-    console.log(`[${i}] ===== END DEBUG =====\n`);
+    log(`[${i}] Skip invalid URL:`, url);
     return;
   }
-  
-  console.log(`[${i}] 7. VALID - Proceeding with URL check`);
-  console.log(`[${i}] ===== END DEBUG =====\n`);
 
   const now = Date.now();
   const lastRaw = getField(row, 'Last Checked (PST)');
@@ -129,7 +131,11 @@ async function checkStatus(row, i) {
   log(`[${i}] Checking ${platform}: ${url}`);  // Show FULL URL, not baseUrl
   
   try {
-    const response = await fetch(baseUrl, {
+    // For YouTube, always use the full URL with parameters
+    const fetchUrl = platform === 'YouTube' ? url : baseUrl;
+    debug(`[${i}] Fetching: "${fetchUrl}"`);
+    
+    const response = await fetch(fetchUrl, {
       headers: {
         'User-Agent': USER_AGENT,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -159,28 +165,26 @@ async function checkStatus(row, i) {
     if (platform === 'TikTok') {
       // TikTok check
       if (html.includes('"isLiveBroadcast":true')) {
-        log(`[${i}] DEBUG: Found TikTok isLiveBroadcast:true`);
+        debug(`[${i}] Found TikTok isLiveBroadcast:true`);
         status = 'Live';
       } else {
         // Debug: Check what we're getting for TikTok
         if (html.includes('isLiveBroadcast')) {
           const context = html.indexOf('isLiveBroadcast');
-          log(`[${i}] DEBUG: Found 'isLiveBroadcast' at position ${context}`);
-          log(`[${i}] DEBUG: Context: ...${html.substring(Math.max(0, context - 50), context + 100)}...`);
-        } else {
-          log(`[${i}] DEBUG: No 'isLiveBroadcast' found in TikTok response`);
+          debug(`[${i}] Found 'isLiveBroadcast' at position ${context}`);
+          debug(`[${i}] Context: ...${html.substring(Math.max(0, context - 50), context + 100)}...`);
         }
         
         // Check for other TikTok live indicators
         if (html.includes('LiveRoomInfo') || html.includes('"status":2') || html.includes('viewer_count')) {
-          log(`[${i}] DEBUG: Found other TikTok live indicators`);
+          debug(`[${i}] Found other TikTok live indicators`);
         }
       }
     } else if (platform === 'Twitch') {
       // Twitch check - for Twitch, isLiveBroadcast:true means it's currently live
       // The endDate appears to be a projected end time, not an indication the stream has ended
       if (html.includes('"isLiveBroadcast":true')) {
-        log(`[${i}] DEBUG: Found Twitch isLiveBroadcast:true - stream is LIVE`);
+        debug(`[${i}] Found Twitch isLiveBroadcast:true`);
         status = 'Live';
       } else {
         // Additional check: look for viewer count or live badge
@@ -188,34 +192,39 @@ async function checkStatus(row, i) {
             html.includes('"stream":{') ||
             html.includes('viewers</p>') ||
             html.includes('data-a-target="tw-indicator"')) {
-          log(`[${i}] DEBUG: Found other Twitch live indicators`);
+          debug(`[${i}] Found other Twitch live indicators`);
           status = 'Live';
         }
       }
     } else if (platform === 'YouTube') {
       // YouTube check - look for specific live indicators
+      debug(`[${i}] YouTube response length: ${html.length} characters`);
+      
       if (html.includes('"isLiveBroadcast":"True"') && !html.includes('"endDate":"')) {
-        log(`[${i}] DEBUG: Found isLiveBroadcast:True without endDate`);
+        debug(`[${i}] Detected LIVE - isLiveBroadcast:True without endDate`);
+        status = 'Live';
+      } else if (html.includes('"isLiveBroadcast" content="True"') && !html.includes('"endDate"')) {
+        debug(`[${i}] Detected LIVE - isLiveBroadcast content="True" without endDate`);
         status = 'Live';
       } else if (html.includes('"liveBroadcastDetails"') && html.includes('"isLiveNow":true')) {
-        log(`[${i}] DEBUG: Found liveBroadcastDetails with isLiveNow`);
+        debug(`[${i}] Detected LIVE - liveBroadcastDetails with isLiveNow`);
         status = 'Live';
       } else if (html.includes('\\\"isLive\\\":true') || html.includes('"isLive":true')) {
-        log(`[${i}] DEBUG: Found isLive:true`);
+        debug(`[${i}] Detected LIVE - isLive:true`);
         status = 'Live';
       } else if (html.includes('"videoDetails":') && html.includes('"isLiveContent":true') && html.includes('"isLive":true')) {
-        log(`[${i}] DEBUG: Found videoDetails with isLiveContent and isLive`);
+        debug(`[${i}] Detected LIVE - videoDetails with isLiveContent and isLive`);
         status = 'Live';
       }
       
-      // Debug: Check what we're actually finding
-      if (status === 'Offline') {
-        // Check for common offline indicators
-        if (html.includes('Streamed live') || html.includes('was live')) {
-          log(`[${i}] DEBUG: Found past stream indicator`);
-        } else if (html.includes('"watching"')) {
-          log(`[${i}] DEBUG: Found 'watching' but not in live context`);
-        }
+      // Debug helpers if needed
+      if (process.env.DEBUG) {
+        const checks = {
+          'isLiveBroadcast:"True"': html.includes('"isLiveBroadcast":"True"'),
+          'isLiveBroadcast content="True"': html.includes('"isLiveBroadcast" content="True"'),
+          'endDate present': html.includes('"endDate"') || html.includes('endDate"')
+        };
+        debug(`[${i}] YouTube indicators:`, Object.entries(checks).filter(([k,v]) => v).map(([k]) => k).join(', '));
       }
     }
     
@@ -235,9 +244,11 @@ async function batchUpdateRows(cycleStartTime) {
   log(`Preparing batch update for ${pendingUpdates.size} rows...`);
   const nowIso = new Date().toISOString();
   
+  debug('Sheet column headers:', JSON.stringify(sheet.headerValues));
+  
   try {
     // Get fresh data to avoid race conditions
-    log('Fetching fresh sheet data before update...');
+    debug('Fetching fresh sheet data before update...');
     const freshRows = await sheet.getRows();
     
     // Create a map for quick lookup
@@ -268,24 +279,38 @@ async function batchUpdateRows(cycleStartTime) {
         continue;
       }
       
-      // Apply our updates to the fresh row
-      setField(freshRow, 'Status', status);
-      setField(freshRow, 'Last Checked (PST)', nowIso);
+      // Build update object
+      const updates = {
+        'Status': status,
+        'Last Checked (PST)': nowIso
+      };
+      
       if (status === 'Live') {
-        setField(freshRow, 'Last Live (PST)', nowIso);
-      }
-      const addedDate = getField(freshRow, 'Added Date');
-      if (!addedDate) {
-        setField(freshRow, 'Added Date', nowIso);
+        updates['Last Live (PST)'] = nowIso;
       }
       
-      updatedCount++;
+      const addedDate = getField(freshRow, 'Added Date');
+      if (!addedDate) {
+        updates['Added Date'] = nowIso;
+      }
+      
+      // Apply all updates at once
+      freshRow.assign(updates);
+      
+      // Save this row
+      try {
+        await freshRow.save();
+        updatedCount++;
+        debug(`Updated row for ${url} - Status: ${status}`);
+      } catch (saveError) {
+        log(`ERROR saving row for ${url}: ${saveError.message}`);
+        skippedCount++;
+      }
     }
     
-    // Save all updates at once
-    if (updatedCount > 0) {
-      await sheet.saveUpdatedCells();
-      log(`Batch update complete: ${updatedCount} rows would be updated, ${skippedCount} skipped (SHEET UPDATE DISABLED)`);
+    // Log summary
+    if (updatedCount > 0 || skippedCount > 0) {
+      log(`Batch update complete: ${updatedCount} rows updated, ${skippedCount} skipped`);
     } else {
       log(`No rows to update (all were deleted or modified)`);
     }
@@ -299,7 +324,7 @@ async function batchUpdateRows(cycleStartTime) {
 }
 
 async function main() {
-  log(`TikTok Live Checker started`);
+  log(`Live Checker started`);
 
   while (true) {
     try {
@@ -323,21 +348,7 @@ async function main() {
       });
 
       if (prioritized.length > 0) {
-        log('Sample prioritized row:', sheet.headerValues.map((h, idx) => `${h}=${prioritized[0].row._rawData[idx]}`).join('; '));
-        
-        // Debug: Show all YouTube URLs to see if they're truncated in the sheet
-        const youtubeRows = prioritized.filter(({row}) => {
-          const url = getField(row, 'Link')?.trim();
-          return url && url.includes('youtube.com');
-        }).slice(0, 5); // Show first 5 YouTube URLs
-        
-        if (youtubeRows.length > 0) {
-          log('DEBUG: First few YouTube URLs from sheet:');
-          youtubeRows.forEach(({row, i}) => {
-            const url = getField(row, 'Link');
-            log(`  [${i}] Raw URL:`, JSON.stringify(url));
-          });
-        }
+        debug('Sample prioritized row:', sheet.headerValues.map((h, idx) => `${h}=${prioritized[0].row._rawData[idx]}`).join('; '))
       }
 
       // Check all streams
