@@ -1,9 +1,9 @@
 # Livestream Checker
 
-A lightweight Node.js app that checks TikTok and YouTube livestream URLs from a Google Sheet and updates their status.
+A lightweight Node.js app that checks TikTok, YouTube, and Twitch livestream URLs from a Google Sheet and updates their status.
 
 This tool:
-- Checks whether TikTok or YouTube streams are currently **Live** or **Offline** via HTTP requests
+- Checks whether TikTok, YouTube, or Twitch streams are currently **Live** or **Offline** via HTTP requests
 - Updates a Google Sheet with the status and timestamps
 - Remembers the most recent "Live" timestamp in the `"Last Live (PST)"` column
 - No browser automation required - uses direct HTTP requests

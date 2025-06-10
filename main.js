@@ -75,7 +75,8 @@ async function checkStatus(row, i) {
     tiktok: /^https:\/\/.*\.tiktok\.com\/.+\/live(\?.*)?$/,
     youtubeWatch: /^https:\/\/(www\.)?youtube\.com\/watch\?v=.+/,
     youtubeLive: /^https:\/\/(www\.)?youtube\.com\/live\/.+/,
-    youtubeShort: /^https:\/\/youtu\.be\/.+/
+    youtubeShort: /^https:\/\/youtu\.be\/.+/,
+    twitch: /^https:\/\/(www\.)?twitch\.tv\/.+/
   };
   
   console.log(`[${i}] 4. Pattern matching:`);
@@ -122,7 +123,9 @@ async function checkStatus(row, i) {
   }
 
   const baseUrl = url.split('?')[0];
-  const platform = url.includes('tiktok.com') ? 'TikTok' : 'YouTube';
+  const platform = url.includes('tiktok.com') ? 'TikTok' : 
+                   url.includes('youtube.com') || url.includes('youtu.be') ? 'YouTube' :
+                   url.includes('twitch.tv') ? 'Twitch' : 'Unknown';
   log(`[${i}] Checking ${platform}: ${url}`);  // Show FULL URL, not baseUrl
   
   try {
@@ -151,7 +154,23 @@ async function checkStatus(row, i) {
       if (html.includes('"isLiveBroadcast":true')) {
         status = 'Live';
       }
-    } else {
+    } else if (platform === 'Twitch') {
+      // Twitch check - for Twitch, isLiveBroadcast:true means it's currently live
+      // The endDate appears to be a projected end time, not an indication the stream has ended
+      if (html.includes('"isLiveBroadcast":true')) {
+        log(`[${i}] DEBUG: Found Twitch isLiveBroadcast:true - stream is LIVE`);
+        status = 'Live';
+      } else {
+        // Additional check: look for viewer count or live badge
+        if (html.includes('tw-channel-status-text-indicator') || 
+            html.includes('"stream":{') ||
+            html.includes('viewers</p>') ||
+            html.includes('data-a-target="tw-indicator"')) {
+          log(`[${i}] DEBUG: Found other Twitch live indicators`);
+          status = 'Live';
+        }
+      }
+    } else if (platform === 'YouTube') {
       // YouTube check - look for specific live indicators
       if (html.includes('"isLiveBroadcast":"True"') && !html.includes('"endDate":"')) {
         log(`[${i}] DEBUG: Found isLiveBroadcast:True without endDate`);
@@ -168,7 +187,7 @@ async function checkStatus(row, i) {
       }
       
       // Debug: Check what we're actually finding
-      if (status === 'Offline' && platform === 'YouTube') {
+      if (status === 'Offline') {
         // Check for common offline indicators
         if (html.includes('Streamed live') || html.includes('was live')) {
           log(`[${i}] DEBUG: Found past stream indicator`);
