@@ -1,4 +1,3 @@
-import { chromium } from 'playwright';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { GoogleAuth } from 'google-auth-library';
 import fs from 'fs/promises';
@@ -9,17 +8,10 @@ const SHEET_NAME = 'Livesheet';
 const RATE_LIVE = 2 * 60 * 1000;
 const RATE_OFF = 7 * 60 * 1000;
 
-const PAGE_WAIT_MIN = 6000;
-const PAGE_WAIT_MAX = 12000;
-
-const BETWEEN_ROW_DELAY_MIN = 5000;
-const BETWEEN_ROW_DELAY_MAX = 9000;
-
 const LOOP_DELAY_MIN = 40000;
 const LOOP_DELAY_MAX = 60000;
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
-const VIEWPORT = { width: 1280, height: 800 };
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 const rand = (min, max) => delay(min + Math.random() * (max - min));
@@ -49,7 +41,7 @@ function setField(row, name, val) {
   if (idx >= 0) row._rawData[idx] = val;
 }
 
-async function checkStatus(page, row, i) {
+async function checkStatus(row, i) {
   const url = getField(row, 'Link')?.trim();
   const isValidLiveUrl = url && /^https:\/\/.*\.tiktok\.com\/.+\/live(\?.*)?$/.test(url);
   if (!isValidLiveUrl) {
@@ -69,36 +61,35 @@ async function checkStatus(page, row, i) {
   }
 
   const baseUrl = url.split('?')[0];
-  log(`[${i}] Visiting ${baseUrl}`);
+  log(`[${i}] Checking ${baseUrl}`);
+  
   try {
-    await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    const finalUrl = page.url();
-    if (finalUrl.includes('/?_r=1')) {
-      log(`[${i}] Redirected to TikTok homepage (offline): ${url}`);
-      await updateRowByLink(url, 'Offline');
+    const response = await fetch(baseUrl, {
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache'
+      },
+      redirect: 'follow'
+    });
+
+    if (response.status !== 200) {
+      log(`[${i}] HTTP ${response.status} for ${url}`);
       return;
     }
-    await rand(PAGE_WAIT_MIN, PAGE_WAIT_MAX);
-  } catch (e) {
-    log(`[${i}] Navigation error:`, e.message);
-    return;
-  }
 
-  const html = await page.content();
-  let status = 'Offline';
-  try {
-    const viewerIconVisible = await page.locator('svg[aria-label*="viewer"] ~ span').first().isVisible();
-    if (viewerIconVisible || html.includes('"isLiveBroadcast":true')) {
-      status = 'Live';
-    } else if (html.includes('LIVE has ended')) {
-      status = 'Offline';
-    }
+    const html = await response.text();
+    const status = html.includes('"isLiveBroadcast":true') ? 'Live' : 'Offline';
+    
+    log(`[${i}] Status: ${status} for ${baseUrl}`);
+    await updateRowByLink(url, status);
+    
   } catch (e) {
-    log(`[${i}] Viewer icon check error:`, e.message);
+    log(`[${i}] Request error:`, e.message);
   }
-
-  await updateRowByLink(url, status);
-  await rand(BETWEEN_ROW_DELAY_MIN, BETWEEN_ROW_DELAY_MAX);
 }
 
 async function updateRowByLink(linkUrl, status) {
@@ -127,27 +118,7 @@ async function updateRowByLink(linkUrl, status) {
 }
 
 async function main() {
-  log(`Using UA: ${USER_AGENT}`);
-
-  const context = await chromium.launchPersistentContext(
-    './user-data-dir',
-    {
-      headless: false,
-      userAgent: USER_AGENT,
-      viewport: VIEWPORT,
-      args: ['--disable-blink-features=AutomationControlled']
-    }
-  );
-
-  try {
-    const cookies = JSON.parse(await fs.readFile('./cookies.json', 'utf8'));
-    await context.addCookies(cookies);
-    log(`✅ Injected ${cookies.length} cookies from cookies.json`);
-  } catch (err) {
-    log(`⚠️ No cookies.json loaded:`, err.message);
-  }
-
-  const page = await context.newPage();
+  log(`TikTok Live Checker started`);
 
   while (true) {
     const rows = await sheet.getRows();
@@ -170,7 +141,7 @@ async function main() {
     }
 
     for (const { row, i } of prioritized) {
-      await checkStatus(page, row, i);
+      await checkStatus(row, i);
     }
 
     const sleepTime = LOOP_DELAY_MIN + Math.random() * (LOOP_DELAY_MAX - LOOP_DELAY_MIN);

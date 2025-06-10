@@ -1,11 +1,10 @@
-FROM mcr.microsoft.com/playwright:v1.52.0-noble
+FROM node:20-alpine
 
 WORKDIR /app
-COPY . .
 
+COPY package*.json ./
 RUN npm install
 
-# Important for persistent context compatibility
-ENV HOME=/root
+COPY . .
 
 CMD ["node", "main.js"]

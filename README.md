@@ -1,21 +1,20 @@
 # Livestream Checker
 
-A Dockerized Playwright app that checks TikTok livestream URLs from a Google Sheet and updates their status.
+A lightweight Node.js app that checks TikTok livestream URLs from a Google Sheet and updates their status.
 
 This tool:
-- Checks whether each TikTok stream is currently **Live** or **Offline**
+- Checks whether each TikTok stream is currently **Live** or **Offline** via HTTP requests
 - Updates a Google Sheet with the status and timestamps
 - Remembers the most recent "Live" timestamp in the `"Last Live (PST)"` column
-- Authenticates using your real TikTok session via manual cookie injection
+- No browser automation required - uses direct HTTP requests
 
 ---
 
 ## 🔧 Requirements
 
-- Node.js (for development, optional)
-- Docker
+- Node.js 18+ (for native fetch support)
+- Docker (optional)
 - A Google Cloud service account with access to a Google Sheet
-- A logged-in TikTok session (manually exported cookies)
 
 ---
 
@@ -23,11 +22,10 @@ This tool:
 
 | File                 | Purpose                                   |
 |----------------------|-------------------------------------------|
-| `main.js`            | Main app logic (runs the Playwright loop) |
+| `main.js`            | Main app logic (checks streams via HTTP) |
 | `Dockerfile`         | Builds the Docker container               |
-| `cookies.example.json` | Template for TikTok session cookies     |
 | `creds.example.json`   | Template for Google service account key |
-| `package.json`       | Node dependencies for Playwright + Sheets |
+| `package.json`       | Node dependencies for Google Sheets API   |
 
 ---
 
@@ -56,7 +54,7 @@ Make sure:
 2. Create a **service account**
 3. Create and download a **JSON key**
 4. Rename it `creds.json`
-5. Share your Google Sheet with the service account’s email
+5. Share your Google Sheet with the service account's email
 
 Example `creds.json`:
 ```json
@@ -70,23 +68,6 @@ Example `creds.json`:
 }
 ```
 
-## 🍪 TikTok Cookie Auth
-
-TikTok actively blocks automation logins. Instead, you must:
-
-1.	Log in to TikTok using Chrome
-2.	Open DevTools → Application → Storage → Cookies
-3.	Copy the relevant values for:
-    -	sessionid
-    -	sid_tt
-    -	uid_tt
-    -	ttwid
-    -	s_v_web_id
-    -	csrfToken
-    -	odin_tt
-4.	Format them like the provided cookies.example.json
-5. Save as cookies.json in your project root.
-
 ## 🐳 Docker: Build the Container
 
 ```shell
@@ -95,24 +76,37 @@ docker build -t tiktok-checker .
 
 ## 🚀 Run the App
 
-Make sure that the Chrome profile directory is correct, authed, and mapped in the volume mount below.
+### Local Node.js
+```shell
+npm install
+node main.js
+```
 
+### Docker
 ```shell
 docker run -it --rm \
-  --ipc=host \
-  --privileged \
-  -e HOME=/root \
-  -e DISPLAY=host.docker.internal:0 \
-  -v "~/Library/Application Support/Google/Chrome/Profile 1:/tiktok-profile" \
-  -v $(pwd)/main.js:/app/main.js \
   -v $(pwd)/creds.json:/app/creds.json \
-  -v $(pwd)/cookies.json:/app/cookies.json \
-  tiktok-checker node main.js
+  tiktok-checker
+```
+
+### Docker Compose (Recommended)
+```shell
+docker-compose up -d
+```
+
+To view logs:
+```shell
+docker-compose logs -f
+```
+
+To stop:
+```shell
+docker-compose down
 ```
 
 ### ✅ Notes:
-- The DISPLAY environment assumes XQuartz is running on macOS
-- You do not need to mount the Chrome profile if you’re using cookies.json for auth
 - The app runs in a loop and respects rate limits:
-- Live feeds checked every ~2 minutes
-- Offline feeds checked every ~7 minutes
+  - Live feeds checked every ~2 minutes
+  - Offline feeds checked every ~7 minutes
+- No browser or cookies needed - uses direct HTTP requests
+- Lighter and faster than browser automation

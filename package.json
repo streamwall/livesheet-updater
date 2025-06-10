@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "playwright": "^1.52.0",
     "google-spreadsheet": "^4.1.4",
     "google-auth-library": "^9.15.1"
   }

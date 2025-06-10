@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  tiktok-checker:
+    build: .
+    container_name: tiktok-live-checker
+    restart: unless-stopped
+    volumes:
+      - ./creds.json:/app/creds.json:ro
+    environment:
+      - NODE_ENV=production
+      - TZ=America/Los_Angeles
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
