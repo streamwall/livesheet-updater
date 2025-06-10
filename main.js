@@ -46,9 +46,13 @@ const pendingUpdates = new Map();
 
 async function checkStatus(row, i) {
   const url = getField(row, 'Link')?.trim();
-  const isValidLiveUrl = url && /^https:\/\/.*\.tiktok\.com\/.+\/live(\?.*)?$/.test(url);
+  const isValidLiveUrl = url && (
+    /^https:\/\/.*\.tiktok\.com\/.+\/live(\?.*)?$/.test(url) ||
+    /^https:\/\/(www\.)?youtube\.com\/watch\?v=/.test(url) ||
+    /^https:\/\/youtu\.be\//.test(url)
+  );
   if (!isValidLiveUrl) {
-    log(`[${i}] Skip invalid live URL:`, url);
+    log(`[${i}] Skip invalid URL:`, url);
     return;
   }
 
@@ -64,7 +68,8 @@ async function checkStatus(row, i) {
   }
 
   const baseUrl = url.split('?')[0];
-  log(`[${i}] Checking ${baseUrl}`);
+  const platform = url.includes('tiktok.com') ? 'TikTok' : 'YouTube';
+  log(`[${i}] Checking ${platform}: ${baseUrl}`);
   
   try {
     const response = await fetch(baseUrl, {
@@ -85,9 +90,18 @@ async function checkStatus(row, i) {
     }
 
     const html = await response.text();
-    const status = html.includes('"isLiveBroadcast":true') ? 'Live' : 'Offline';
+    let status = 'Offline';
     
-    log(`[${i}] Status: ${status} for ${baseUrl}`);
+    // TikTok check
+    if (html.includes('"isLiveBroadcast":true')) {
+      status = 'Live';
+    }
+    // YouTube check  
+    else if (html.includes('"isLiveBroadcast":"True"') && !html.includes('"endDate":"')) {
+      status = 'Live';
+    }
+    
+    log(`[${i}] Status: ${status} for ${platform} ${baseUrl}`);
     
     // Store update for batching
     pendingUpdates.set(url, { row, status, index: i });
