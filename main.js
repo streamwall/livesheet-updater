@@ -147,12 +147,34 @@ async function checkStatus(row, i) {
     }
 
     const html = await response.text();
+    
+    // Check for WAF/challenge pages
+    if (html.includes('_wafchallengeid') || html.includes('Please wait...') || html.includes('/waf-aiso/')) {
+      log(`[${i}] WARNING: Received challenge/WAF page, skipping`);
+      return; // Don't update status when we get a challenge page
+    }
+    
     let status = 'Offline';
     
     if (platform === 'TikTok') {
       // TikTok check
       if (html.includes('"isLiveBroadcast":true')) {
+        log(`[${i}] DEBUG: Found TikTok isLiveBroadcast:true`);
         status = 'Live';
+      } else {
+        // Debug: Check what we're getting for TikTok
+        if (html.includes('isLiveBroadcast')) {
+          const context = html.indexOf('isLiveBroadcast');
+          log(`[${i}] DEBUG: Found 'isLiveBroadcast' at position ${context}`);
+          log(`[${i}] DEBUG: Context: ...${html.substring(Math.max(0, context - 50), context + 100)}...`);
+        } else {
+          log(`[${i}] DEBUG: No 'isLiveBroadcast' found in TikTok response`);
+        }
+        
+        // Check for other TikTok live indicators
+        if (html.includes('LiveRoomInfo') || html.includes('"status":2') || html.includes('viewer_count')) {
+          log(`[${i}] DEBUG: Found other TikTok live indicators`);
+        }
       }
     } else if (platform === 'Twitch') {
       // Twitch check - for Twitch, isLiveBroadcast:true means it's currently live
@@ -262,7 +284,7 @@ async function batchUpdateRows(cycleStartTime) {
     
     // Save all updates at once
     if (updatedCount > 0) {
-      // await sheet.saveUpdatedCells();
+      await sheet.saveUpdatedCells();
       log(`Batch update complete: ${updatedCount} rows would be updated, ${skippedCount} skipped (SHEET UPDATE DISABLED)`);
     } else {
       log(`No rows to update (all were deleted or modified)`);
