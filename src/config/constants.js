@@ -35,6 +35,92 @@ export const PRIORITY_GROUP_HIGH = 100;
 export const PRIORITY_GROUP_MID = 10;
 export const PRIORITY_GROUP_LOW = 1;
 
+// Priority calculation
+export const PRIORITY_MIN = 0;
+export const PRIORITY_MAX = 100;
+export const PRIORITY_STEEPNESS_FACTOR = 4;
+
+// HTTP Status Codes
+export const HTTP_STATUS_OK = 200;
+
+// Stream Status Values
+export const STATUS_LIVE = 'Live';
+export const STATUS_OFFLINE = 'Offline';
+
+// Time Conversion
+export const MS_PER_SECOND = 1000;
+
+// Platform Names
+export const PLATFORM_TIKTOK = 'TikTok';
+export const PLATFORM_YOUTUBE = 'YouTube';
+export const PLATFORM_TWITCH = 'Twitch';
+export const PLATFORM_UNKNOWN = 'Unknown';
+
+// Platform Domains
+export const DOMAIN_TIKTOK = 'tiktok.com';
+export const DOMAIN_YOUTUBE = 'youtube.com';
+export const DOMAIN_YOUTUBE_SHORT = 'youtu.be';
+export const DOMAIN_TWITCH = 'twitch.tv';
+
+// WAF/Challenge Detection
+export const WAF_CHALLENGE_PATTERNS = ['_cf_chl_opt', '_jschl_answer', '_wafchallengeid'];
+
+// Platform Live Detection Patterns
+export const LIVE_INDICATORS = {
+  TIKTOK: ['"isLiveBroadcast":true'],
+  YOUTUBE: [
+    '"isLiveBroadcast":"True"',
+    '"isLiveBroadcast" content="True"',
+    '"liveBroadcastDetails"',
+    '"isLiveNow":true',
+    '\\\"isLive\\\":true',
+    '"isLive":true',
+    '"isLiveContent":true'
+  ],
+  TWITCH: [
+    '"isLiveBroadcast":true',
+    'tw-channel-status-text-indicator',
+    '"stream":{',
+    'viewers</p>',
+    'data-a-target="tw-indicator"'
+  ]
+};
+
+// YouTube specific patterns
+export const YOUTUBE_OFFLINE_INDICATOR = '"endDate"';
+
+// Google Sheets API
+export const GOOGLE_SHEETS_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
+export const DEFAULT_ROW_LIMIT = 1;
+
+// Google Sheets Column Names
+export const COLUMN_NAMES = {
+  SOURCE: 'Source',
+  PLATFORM: 'Platform',
+  LINK: 'Link',
+  STATUS: 'Status',
+  LAST_CHECKED: 'Last Checked (PST)',
+  LAST_LIVE: 'Last Live (PST)',
+  ADDED_DATE: 'Added Date',
+  URL: 'URL',
+  CITY: 'City',
+  STATE: 'State',
+  PRIORITY: 'Priority'
+};
+
+// Error Messages
+export const ERROR_MESSAGES = {
+  MISSING_CREDS: 'Missing creds.json file. Please create one from creds.example.json',
+  INVALID_CREDS: 'Invalid creds.json file. Please ensure it contains valid JSON',
+  CREDS_LOAD_FAILED: (error) => `Failed to load credentials: ${error}`,
+  SHEET_NOT_FOUND: (name) => `Sheet "${name}" not found`,
+  KNOWN_STREAMERS_WARNING: (name) => `Warning: Sheet "${name}" not found. Known streamers feature disabled.`,
+  KNOWN_STREAMERS_MODE_ERROR: 'ERROR: Known Streamers Only mode requested but Known Streamers sheet not found!'
+};
+
+// File Paths
+export const CREDS_FILE_PATH = './creds.json';
+
 // Default headers for fetch
 export const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 export const DEFAULT_HEADERS = {

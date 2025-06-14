@@ -8,7 +8,11 @@ import {
   MAX_KNOWN_STREAMERS_PER_CYCLE, 
   PRIORITY_GROUP_HIGH, 
   PRIORITY_GROUP_MID, 
-  PRIORITY_GROUP_LOW 
+  PRIORITY_GROUP_LOW,
+  MS_PER_SECOND,
+  COLUMN_NAMES,
+  STATUS_LIVE,
+  MINUTE
 } from '../config/constants.js';
 import { cleanUrl, isValidLiveUrl } from '../utils/url.js';
 import { getCheckRateForPriority } from '../utils/priority.js';
@@ -26,7 +30,7 @@ export const createKnownStreamersService = (deps, logger, sheetHelpers, streamCh
   function isUrlInLivesheet(url, livesheetRows, sheet) {
     const cleaned = cleanUrl(url);
     return livesheetRows.some(row => {
-      const rowUrl = getField(row, 'Link', sheet);
+      const rowUrl = getField(row, COLUMN_NAMES.LINK, sheet);
       return rowUrl && cleanUrl(rowUrl) === cleaned;
     });
   }
@@ -57,7 +61,7 @@ export const createKnownStreamersService = (deps, logger, sheetHelpers, streamCh
       
       // Sort by priority (higher first) to ensure high priority streamers get checked first
       const sortedStreamers = knownStreamers.map((streamer, originalIdx) => {
-        const priority = parseInt(getField(streamer, 'Priority', knownStreamersSheet)) || 0;
+        const priority = parseInt(getField(streamer, COLUMN_NAMES.PRIORITY, knownStreamersSheet)) || 0;
         return { streamer, priority, originalIdx };
       }).sort((a, b) => b.priority - a.priority);
       
@@ -80,10 +84,10 @@ export const createKnownStreamersService = (deps, logger, sheetHelpers, streamCh
       
       for (let i = 0; i < sortedStreamers.length; i++) {
         const { streamer: knownStreamer, priority, originalIdx: idx } = sortedStreamers[i];
-        const rawUrl = getField(knownStreamer, 'URL', knownStreamersSheet);
-        const source = getField(knownStreamer, 'Source', knownStreamersSheet);
-        const city = getField(knownStreamer, 'City', knownStreamersSheet);
-        const state = getField(knownStreamer, 'State', knownStreamersSheet);
+        const rawUrl = getField(knownStreamer, COLUMN_NAMES.URL, knownStreamersSheet);
+        const source = getField(knownStreamer, COLUMN_NAMES.SOURCE, knownStreamersSheet);
+        const city = getField(knownStreamer, COLUMN_NAMES.CITY, knownStreamersSheet);
+        const state = getField(knownStreamer, COLUMN_NAMES.STATE, knownStreamersSheet);
         
         if (!rawUrl) {
           log(`[Known ${idx}] Skipping - no URL`);
@@ -105,8 +109,8 @@ export const createKnownStreamersService = (deps, logger, sheetHelpers, streamCh
         const rate = getCheckRateForPriority(priority);
         
         if (now - lastCheck < rate) {
-          const timeLeft = Math.round((rate - (now - lastCheck)) / 1000);
-          const rateMinutes = Math.round(rate / 60000);
+          const timeLeft = Math.round((rate - (now - lastCheck)) / MS_PER_SECOND);
+          const rateMinutes = Math.round(rate / MINUTE);
           debug(`[Known ${idx}] Skip ${url} (priority ${priority}, checks every ${rateMinutes}m, ${timeLeft}s left)`);
           skippedRateLimit++;
           continue;
@@ -139,20 +143,20 @@ export const createKnownStreamersService = (deps, logger, sheetHelpers, streamCh
           continue;
         }
         
-        if (result.status === 'Live') {
+        if (result.status === STATUS_LIVE) {
           log(`[Known ${idx}] LIVE! Adding to Livesheet: ${url}`);
           
           // Add to Livesheet
           const newRow = await sheet.addRow({
-            'Link': url,
-            'Platform': result.platform,
-            'City': city || '',
-            'State': state || '',
-            'Status': 'Live',
-            'Last Checked (PST)': nowIso,
-            'Last Live (PST)': nowIso,
-            'Added Date': nowIso,
-            'Source': source || ''
+            [COLUMN_NAMES.LINK]: url,
+            [COLUMN_NAMES.PLATFORM]: result.platform,
+            [COLUMN_NAMES.CITY]: city || '',
+            [COLUMN_NAMES.STATE]: state || '',
+            [COLUMN_NAMES.STATUS]: STATUS_LIVE,
+            [COLUMN_NAMES.LAST_CHECKED]: nowIso,
+            [COLUMN_NAMES.LAST_LIVE]: nowIso,
+            [COLUMN_NAMES.ADDED_DATE]: nowIso,
+            [COLUMN_NAMES.SOURCE]: source || ''
           });
           
           addedCount++;

@@ -3,7 +3,7 @@
  * @module services/batchUpdater
  */
 
-// Batch update functionality
+import { COLUMN_NAMES, STATUS_LIVE } from '../config/constants.js';
 
 export const createBatchUpdater = (deps, logger, sheetHelpers) => {
   const { Date } = deps;
@@ -25,7 +25,7 @@ export const createBatchUpdater = (deps, logger, sheetHelpers) => {
       const rowsByUrl = new Map();
       
       for (const row of freshRows) {
-        const url = getField(row, 'Link', sheet);
+        const url = getField(row, COLUMN_NAMES.LINK, sheet);
         if (url) {
           rowsByUrl.set(url, row);
         }
@@ -46,7 +46,7 @@ export const createBatchUpdater = (deps, logger, sheetHelpers) => {
         }
         
         // Check if row was modified by another process after our check started
-        const lastChecked = getField(freshRow, 'Last Checked (PST)', sheet);
+        const lastChecked = getField(freshRow, COLUMN_NAMES.LAST_CHECKED, sheet);
         if (lastChecked && new Date(lastChecked).getTime() > cycleStartTime) {
           log(`Row updated by another process, skipping: ${url}`);
           skipCount++;
@@ -56,18 +56,18 @@ export const createBatchUpdater = (deps, logger, sheetHelpers) => {
         try {
           const now = new Date().toISOString();
           const updates = {
-            'Status': update.status,
-            'Last Checked (PST)': now
+            [COLUMN_NAMES.STATUS]: update.status,
+            [COLUMN_NAMES.LAST_CHECKED]: now
           };
           
           // Update Last Live timestamp if status is Live
-          if (update.status === 'Live') {
-            updates['Last Live (PST)'] = now;
+          if (update.status === STATUS_LIVE) {
+            updates[COLUMN_NAMES.LAST_LIVE] = now;
           }
           
           // Set Added Date if not present
-          if (!getField(freshRow, 'Added Date', sheet)) {
-            updates['Added Date'] = now;
+          if (!getField(freshRow, COLUMN_NAMES.ADDED_DATE, sheet)) {
+            updates[COLUMN_NAMES.ADDED_DATE] = now;
           }
           
           freshRow.assign(updates);

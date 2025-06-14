@@ -17,9 +17,20 @@ export const isValidLiveUrl = (url) => {
   return !!(url && Object.values(URL_PATTERNS).some(p => p.test(url)));
 };
 
+import { 
+  PLATFORM_TIKTOK,
+  PLATFORM_YOUTUBE,
+  PLATFORM_TWITCH,
+  PLATFORM_UNKNOWN,
+  DOMAIN_TIKTOK,
+  DOMAIN_YOUTUBE,
+  DOMAIN_YOUTUBE_SHORT,
+  DOMAIN_TWITCH
+} from '../config/constants.js';
+
 export const getPlatform = (url) => {
-  if (url.includes('tiktok.com')) return 'TikTok';
-  if (url.includes('youtube.com') || url.includes('youtu.be')) return 'YouTube';
-  if (url.includes('twitch.tv')) return 'Twitch';
-  return 'Unknown';
+  if (url.includes(DOMAIN_TIKTOK)) return PLATFORM_TIKTOK;
+  if (url.includes(DOMAIN_YOUTUBE) || url.includes(DOMAIN_YOUTUBE_SHORT)) return PLATFORM_YOUTUBE;
+  if (url.includes(DOMAIN_TWITCH)) return PLATFORM_TWITCH;
+  return PLATFORM_UNKNOWN;
 };

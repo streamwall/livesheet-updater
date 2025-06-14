@@ -3,7 +3,23 @@
  * @module services/streamChecker
  */
 
-import { DEFAULT_HEADERS, RATE_LIVE, RATE_OFF, RECENTLY_LIVE_THRESHOLD } from '../config/constants.js';
+import { 
+  DEFAULT_HEADERS, 
+  RATE_LIVE, 
+  RATE_OFF, 
+  RECENTLY_LIVE_THRESHOLD,
+  HTTP_STATUS_OK,
+  STATUS_LIVE,
+  STATUS_OFFLINE,
+  WAF_CHALLENGE_PATTERNS,
+  LIVE_INDICATORS,
+  YOUTUBE_OFFLINE_INDICATOR,
+  PLATFORM_YOUTUBE,
+  PLATFORM_TIKTOK,
+  PLATFORM_TWITCH,
+  MS_PER_SECOND,
+  COLUMN_NAMES
+} from '../config/constants.js';
 import { cleanUrl, isValidLiveUrl, getPlatform } from '../utils/url.js';
 
 export const createStreamChecker = (deps, logger, sheetHelpers) => {
@@ -25,7 +41,7 @@ export const createStreamChecker = (deps, logger, sheetHelpers) => {
     const platform = getPlatform(cleaned);
     
     try {
-      const fetchUrl = platform === 'YouTube' ? cleaned : baseUrl;
+      const fetchUrl = platform === PLATFORM_YOUTUBE ? cleaned : baseUrl;
       debug(`Fetching status for ${platform}: "${fetchUrl}"`);
       
       const response = await fetch(fetchUrl, {
@@ -33,7 +49,7 @@ export const createStreamChecker = (deps, logger, sheetHelpers) => {
         redirect: 'follow'
       });
       
-      if (response.status !== 200) {
+      if (response.status !== HTTP_STATUS_OK) {
         debug(`Non-200 status (${response.status}) for ${fetchUrl}`);
         return null;
       }
@@ -41,39 +57,30 @@ export const createStreamChecker = (deps, logger, sheetHelpers) => {
       const text = await response.text();
       
       // Check for WAF/challenge pages
-      if (text.includes('_cf_chl_opt') || text.includes('_jschl_answer') || text.includes('_wafchallengeid')) {
+      if (WAF_CHALLENGE_PATTERNS.some(pattern => text.includes(pattern))) {
         debug(`WAF/challenge page detected for ${fetchUrl}`);
         return null;
       }
       
-      let status = 'Offline';
+      let status = STATUS_OFFLINE;
       
-      if (platform === 'TikTok') {
-        if (text.includes('"isLiveBroadcast":true')) {
-          status = 'Live';
+      if (platform === PLATFORM_TIKTOK) {
+        if (LIVE_INDICATORS.TIKTOK.some(indicator => text.includes(indicator))) {
+          status = STATUS_LIVE;
         }
-      } else if (platform === 'YouTube') {
+      } else if (platform === PLATFORM_YOUTUBE) {
         // Check various YouTube live indicators
-        if (
-          (text.includes('"isLiveBroadcast":"True"') && !text.includes('endDate')) ||
-          text.includes('"isLiveBroadcast" content="True"') ||
-          text.includes('"liveBroadcastDetails":{"isLiveNow":true}') ||
-          text.includes('"isLive":true') ||
-          text.includes('\\\"isLive\\\":true') ||
-          text.includes('"videoDetails":{"isLiveContent":true,"isLive":true}')
-        ) {
-          status = 'Live';
+        const hasLiveIndicator = LIVE_INDICATORS.YOUTUBE.some(indicator => text.includes(indicator));
+        const hasEndDate = text.includes(YOUTUBE_OFFLINE_INDICATOR);
+        
+        // Special handling for "isLiveBroadcast":"True" which needs to check for endDate
+        if (hasLiveIndicator && (!text.includes('"isLiveBroadcast":"True"') || !hasEndDate)) {
+          status = STATUS_LIVE;
         }
-      } else if (platform === 'Twitch') {
+      } else if (platform === PLATFORM_TWITCH) {
         // Check various Twitch live indicators
-        if (
-          text.includes('"isLiveBroadcast":true') ||
-          text.includes('tw-channel-status-text-indicator') ||
-          text.includes('"stream":{') ||
-          text.includes('viewers</p>') ||
-          text.includes('data-a-target="tw-indicator"')
-        ) {
-          status = 'Live';
+        if (LIVE_INDICATORS.TWITCH.some(indicator => text.includes(indicator))) {
+          status = STATUS_LIVE;
         }
       }
       
@@ -100,7 +107,7 @@ export const createStreamChecker = (deps, logger, sheetHelpers) => {
    * @returns {Promise<void>}
    */
   async function checkStatus(row, i, sheet) {
-    const url = getField(row, 'Link', sheet);
+    const url = getField(row, COLUMN_NAMES.LINK, sheet);
     if (!url) {
       debug(`[${i}] No URL found`);
       return;
@@ -121,20 +128,20 @@ export const createStreamChecker = (deps, logger, sheetHelpers) => {
     }
     
     // Check rate limit
-    const currentStatus = getField(row, 'Status', sheet);
-    const lastChecked = getField(row, 'Last Checked (PST)', sheet);
+    const currentStatus = getField(row, COLUMN_NAMES.STATUS, sheet);
+    const lastChecked = getField(row, COLUMN_NAMES.LAST_CHECKED, sheet);
     
     if (lastChecked) {
       const timeSinceLastCheck = Date.now() - new Date(lastChecked).getTime();
-      const rateLimit = currentStatus === 'Live' ? RATE_LIVE : RATE_OFF;
+      const rateLimit = currentStatus === STATUS_LIVE ? RATE_LIVE : RATE_OFF;
       
       // Also check if recently live (should be checked more frequently)
-      const lastLive = getField(row, 'Last Live (PST)', sheet);
+      const lastLive = getField(row, COLUMN_NAMES.LAST_LIVE, sheet);
       const recentlyLive = lastLive && (Date.now() - new Date(lastLive).getTime() <= RECENTLY_LIVE_THRESHOLD);
       const effectiveRateLimit = recentlyLive ? RATE_LIVE : rateLimit;
       
       if (timeSinceLastCheck < effectiveRateLimit) {
-        const timeAgo = Math.round(timeSinceLastCheck / 1000);
+        const timeAgo = Math.round(timeSinceLastCheck / MS_PER_SECOND);
         log(`[${i}] Skip (rate limit, ${timeAgo}s ago): ${cleanedUrl}`);
         return;
       }

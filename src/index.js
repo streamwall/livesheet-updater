@@ -8,7 +8,11 @@ import {
   LOOP_DELAY_MIN, 
   LOOP_DELAY_MAX, 
   ERROR_RETRY_DELAY,
-  RECENTLY_LIVE_THRESHOLD
+  RECENTLY_LIVE_THRESHOLD,
+  MS_PER_SECOND,
+  STATUS_LIVE,
+  COLUMN_NAMES,
+  ERROR_MESSAGES
 } from './config/constants.js';
 
 export function attachMainLoop(app, deps) {
@@ -29,7 +33,7 @@ export function attachMainLoop(app, deps) {
     log(`Live Checker started in ${mode} mode`);
     
     if (KNOWN_STREAMERS_ONLY && !app.getKnownStreamersSheet()) {
-      log('ERROR: Known Streamers Only mode requested but Known Streamers sheet not found!');
+      log(ERROR_MESSAGES.KNOWN_STREAMERS_MODE_ERROR);
       process.exit(1);
     }
 
@@ -48,9 +52,9 @@ export function attachMainLoop(app, deps) {
           const now = Date.now();
           const prioritized = rows.map((row, i) => ({ row, i })).sort((a, b) => {
             const getPriority = r => {
-              if (!getField(r, 'Last Checked (PST)')) return 3;
-              if (getField(r, 'Status')?.toLowerCase() === 'live') return 2;
-              const lastLive = getField(r, 'Last Live (PST)');
+              if (!getField(r, COLUMN_NAMES.LAST_CHECKED)) return 3;
+              if (getField(r, COLUMN_NAMES.STATUS)?.toLowerCase() === STATUS_LIVE.toLowerCase()) return 2;
+              const lastLive = getField(r, COLUMN_NAMES.LAST_LIVE);
               if (lastLive && now - new Date(lastLive).getTime() <= RECENTLY_LIVE_THRESHOLD) return 1;
               return 0;
             };
@@ -77,7 +81,7 @@ export function attachMainLoop(app, deps) {
         await checkKnownStreamers();
 
         const sleepTime = LOOP_DELAY_MIN + Math.random() * (LOOP_DELAY_MAX - LOOP_DELAY_MIN);
-        const sleepSeconds = Math.round(sleepTime / 1000);
+        const sleepSeconds = Math.round(sleepTime / MS_PER_SECOND);
         log(`Cycle complete — sleeping ${sleepSeconds}s`);
         await delay(sleepTime);
         
