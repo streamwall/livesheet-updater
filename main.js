@@ -299,12 +299,38 @@ async function batchUpdateRows(cycleStartTime) {
       
       // Save this row
       try {
+        // Re-verify row exists before saving to prevent duplicates
+        const rowIndex = freshRow.rowNumber - 2; // rowNumber is 1-based, getRowByIndex is 0-based
+        const verifyRow = await sheet.getRowByIndex(rowIndex);
+        
+        if (!verifyRow) {
+          log(`Row was deleted before save, skipping: ${url}`);
+          skippedCount++;
+          continue;
+        }
+        
+        // Double-check it's the same row by comparing URL
+        const verifyUrl = getField(verifyRow, 'Link')?.trim();
+        if (verifyUrl !== url) {
+          log(`Row position changed (expected ${url}, found ${verifyUrl}), skipping update`);
+          skippedCount++;
+          continue;
+        }
+        
         await freshRow.save();
         updatedCount++;
         debug(`Updated row for ${url} - Status: ${status}`);
       } catch (saveError) {
-        log(`ERROR saving row for ${url}: ${saveError.message}`);
-        skippedCount++;
+        // Check if error is due to row not existing
+        if (saveError.message?.includes('exceeds grid limits') || 
+            saveError.message?.includes('Invalid row') ||
+            saveError.code === 400) {
+          log(`Row no longer exists, skipping: ${url}`);
+          skippedCount++;
+        } else {
+          log(`ERROR saving row for ${url}: ${saveError.message}`);
+          skippedCount++;
+        }
       }
     }
     
