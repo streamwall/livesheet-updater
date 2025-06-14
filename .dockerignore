@@ -1,0 +1,17 @@
+node_modules
+npm-debug.log
+coverage
+.git
+.gitignore
+*.test.js
+*.spec.js
+__tests__
+.env
+.env.*
+.DS_Store
+README.md
+CLAUDE.md
+creds.example.json
+docker-compose.yml
+Dockerfile
+.dockerignore
