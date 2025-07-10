@@ -1,13 +1,24 @@
 services:
-  tiktok-checker:
+  streamsource-checker:
     build: .
-    container_name: tiktok-live-checker
+    container_name: streamsource-live-checker
     restart: unless-stopped
-    volumes:
-      - ./creds.json:/app/creds.json:ro
     environment:
       - NODE_ENV=production
       - TZ=America/Los_Angeles
+      # StreamSource API Configuration (required)
+      - STREAMSOURCE_API_URL=${STREAMSOURCE_API_URL:-https://api.streamsource.com}
+      - STREAMSOURCE_EMAIL=${STREAMSOURCE_EMAIL}
+      - STREAMSOURCE_PASSWORD=${STREAMSOURCE_PASSWORD}
+      # Check rates
+      - RATE_LIVE=${RATE_LIVE:-120000}
+      - RATE_OFF=${RATE_OFF:-420000}
+      # Archiving (optional)
+      - ARCHIVE_ENABLED=${ARCHIVE_ENABLED:-false}
+      - ARCHIVE_THRESHOLD_MINUTES=${ARCHIVE_THRESHOLD_MINUTES:-30}
+      - ARCHIVE_CHECK_INTERVAL=${ARCHIVE_CHECK_INTERVAL:-300000}
+      # Debug logging
+      - DEBUG=${DEBUG:-false}
     logging:
       driver: "json-file"
       options:

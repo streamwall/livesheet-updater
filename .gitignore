@@ -1,4 +1,6 @@
-cookies.json
-creds.json
 node_modules/
 .claude/*
+.env
+.env.local
+coverage/
+logs/

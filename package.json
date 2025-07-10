@@ -1,9 +1,17 @@
 {
-  "name": "tiktok-live-checker",
-  "version": "1.0.0",
+  "name": "streamsource-live-checker",
+  "version": "2.0.0",
+  "description": "Monitors live stream URLs from StreamSource and updates their status",
   "type": "module",
-  "dependencies": {
-    "google-spreadsheet": "^4.1.4",
-    "google-auth-library": "^9.15.1"
+  "scripts": {
+    "start": "node main.js",
+    "test": "NODE_OPTIONS='--experimental-vm-modules --no-warnings' jest",
+    "test:watch": "NODE_OPTIONS='--experimental-vm-modules --no-warnings' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--experimental-vm-modules --no-warnings' jest --coverage"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "@jest/globals": "^29.7.0"
   }
 }

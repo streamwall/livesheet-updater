@@ -1,15 +1,20 @@
-import fs from 'fs/promises';
-import { GoogleAuth } from 'google-auth-library';
-import { GoogleSpreadsheet } from 'google-spreadsheet';
+import StreamSourceClient from './streamSourceClient.js';
 
 // 🗞 Config
-const SHEET_ID = '1amkWpZu5hmI50XGINiz7-02XVNTTZoEARWEVRM-pvKo';
-const SHEET_NAME = 'Livesheet';
-const RATE_LIVE = 2 * 60 * 1000;
-const RATE_OFF = 7 * 60 * 1000;
-
+const RATE_LIVE = parseInt(process.env.RATE_LIVE || '120000'); // 2 minutes default
+const RATE_OFF = parseInt(process.env.RATE_OFF || '420000'); // 7 minutes default
 const LOOP_DELAY_MIN = 10000;
 const LOOP_DELAY_MAX = 20000;
+
+// StreamSource Config
+const STREAMSOURCE_API_URL = process.env.STREAMSOURCE_API_URL || 'https://api.streamsource.com';
+const STREAMSOURCE_EMAIL = process.env.STREAMSOURCE_EMAIL;
+const STREAMSOURCE_PASSWORD = process.env.STREAMSOURCE_PASSWORD;
+
+// Archiving Config (optional)
+const ARCHIVE_ENABLED = process.env.ARCHIVE_ENABLED === 'true';
+const ARCHIVE_THRESHOLD_MINUTES = parseInt(process.env.ARCHIVE_THRESHOLD_MINUTES || '30');
+const ARCHIVE_CHECK_INTERVAL = parseInt(process.env.ARCHIVE_CHECK_INTERVAL || '300000'); // 5 minutes
 
 const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36';
 
@@ -20,83 +25,35 @@ const debug = (...args) => {
   if (process.env.DEBUG) console.log(new Date().toISOString(), '[DEBUG]', ...args);
 };
 
-// 📜 Google Sheets setup
-const CREDS = JSON.parse(await fs.readFile('./creds.json', 'utf8'));
-const auth = new GoogleAuth({
-  credentials: CREDS,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
-const client = await auth.getClient();
-const doc = new GoogleSpreadsheet(SHEET_ID, client);
-await doc.loadInfo();
-
-const sheet = doc.sheetsByTitle[SHEET_NAME];
-if (!sheet) throw new Error(`Sheet "${SHEET_NAME}" not found`);
-await sheet.getRows({ limit: 1 });
-log(`Loaded sheet "${sheet.title}", headers:`, JSON.stringify(sheet.headerValues));
-
-// Helper functions to work with case-insensitive column names
-function getField(row, name) {
-  // Try exact match first
-  if (row.get(name) !== undefined) {
-    return row.get(name);
-  }
-  
-  // Try case-insensitive match
-  const actualColumnName = sheet.headerValues.find(h => h.toLowerCase() === name.toLowerCase());
-  if (actualColumnName) {
-    return row.get(actualColumnName);
-  }
-  
-  // Debug if not found
-  if (name.includes('Date')) {
-    debug(`getField: Column '${name}' not found. Available columns: ${sheet.headerValues.join(', ')}`);
-  }
-  return undefined;
+// Initialize StreamSource client
+if (!STREAMSOURCE_EMAIL || !STREAMSOURCE_PASSWORD) {
+  throw new Error('StreamSource credentials required: STREAMSOURCE_EMAIL and STREAMSOURCE_PASSWORD');
 }
 
-function setField(row, name, val) {
-  // Try exact match first
-  try {
-    row.set(name, val);
-    return;
-  } catch (e) {
-    // Continue to case-insensitive match
-  }
-  
-  // Try case-insensitive match
-  const actualColumnName = sheet.headerValues.find(h => h.toLowerCase() === name.toLowerCase());
-  if (actualColumnName) {
-    row.set(actualColumnName, val);
-  } else {
-    debug(`setField: Failed to set '${name}' = '${val}'. Column not found. Available: ${sheet.headerValues.join(', ')}`);
-  }
-}
+const streamSourceClient = new StreamSourceClient({
+  apiUrl: STREAMSOURCE_API_URL,
+  email: STREAMSOURCE_EMAIL,
+  password: STREAMSOURCE_PASSWORD
+}, { log, error: log });
 
-// Store updates to batch them
-const pendingUpdates = new Map();
+// Authenticate on startup
+await streamSourceClient.authenticate();
+log('Connected to StreamSource API');
 
-async function checkStatus(row, i) {
-  const rawUrl = getField(row, 'Link');
-  
-  // URL processing
-  if (!rawUrl) {
-    return;
+let lastArchiveCheck = 0;
+
+async function checkStreamStatus(stream) {
+  const url = stream.link;
+  if (!url) {
+    log(`Stream ${stream.id} has no URL, skipping`);
+    return null;
   }
-  
+
   // Clean and validate URL
-  let url = rawUrl.trim();
-  const beforeClean = url;
-  
-  // Remove all non-printable and non-ASCII characters
-  url = url.replace(/[^\x20-\x7E]/g, '');
-  // Also specifically remove zero-width characters
-  url = url.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '');
-  
-  if (beforeClean !== url) {
-    debug(`[${i}] Cleaned URL from: ${JSON.stringify(beforeClean)} to: ${JSON.stringify(url)}`);
-  }
-  
+  let cleanUrl = url.trim();
+  cleanUrl = cleanUrl.replace(/[^\x20-\x7E]/g, '');
+  cleanUrl = cleanUrl.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/g, '');
+
   // Validate URL patterns
   const patterns = {
     tiktok: /^https:\/\/.*\.tiktok\.com\/.+\/live(\?.*)?$/,
@@ -105,35 +62,34 @@ async function checkStatus(row, i) {
     youtubeShort: /^https:\/\/youtu\.be\/.+/,
     twitch: /^https:\/\/(www\.)?twitch\.tv\/.+/
   };
-  
-  const isValidLiveUrl = url && Object.values(patterns).some(p => p.test(url));
+
+  const isValidLiveUrl = cleanUrl && Object.values(patterns).some(p => p.test(cleanUrl));
   
   if (!isValidLiveUrl) {
-    log(`[${i}] Skip invalid URL:`, url);
-    return;
+    log(`Stream ${stream.id} has invalid URL: ${cleanUrl}`);
+    return null;
   }
 
+  // Check rate limiting
   const now = Date.now();
-  const lastRaw = getField(row, 'Last Checked (PST)');
-  const lastTs = lastRaw ? new Date(lastRaw).getTime() : 0;
-  const prev = getField(row, 'Status')?.toLowerCase() || 'offline';
-  const threshold = prev === 'live' ? RATE_LIVE : RATE_OFF;
+  const lastChecked = stream.last_checked_at ? new Date(stream.last_checked_at).getTime() : 0;
+  const currentStatus = stream.status?.toLowerCase() || 'offline';
+  const threshold = currentStatus === 'live' ? RATE_LIVE : RATE_OFF;
 
-  if (now - lastTs < threshold) {
-    log(`[${i}] Skip (rate limit, ${Math.round((now - lastTs) / 1000)}s ago):`, url);
-    return;
+  if (now - lastChecked < threshold) {
+    debug(`Stream ${stream.id} checked recently (${Math.round((now - lastChecked) / 1000)}s ago), skipping`);
+    return null;
   }
 
-  const baseUrl = url.split('?')[0];
-  const platform = url.includes('tiktok.com') ? 'TikTok' : 
-                   url.includes('youtube.com') || url.includes('youtu.be') ? 'YouTube' :
-                   url.includes('twitch.tv') ? 'Twitch' : 'Unknown';
-  log(`[${i}] Checking ${platform}: ${url}`);  // Show FULL URL, not baseUrl
+  const baseUrl = cleanUrl.split('?')[0];
+  const platform = stream.platform || 'Unknown';
+  
+  log(`[${stream.id}] Checking ${platform}: ${cleanUrl}`);
   
   try {
     // For YouTube, always use the full URL with parameters
-    const fetchUrl = platform === 'YouTube' ? url : baseUrl;
-    debug(`[${i}] Fetching: "${fetchUrl}"`);
+    const fetchUrl = platform === 'YouTube' ? cleanUrl : baseUrl;
+    debug(`[${stream.id}] Fetching: "${fetchUrl}"`);
     
     const response = await fetch(fetchUrl, {
       headers: {
@@ -148,216 +104,179 @@ async function checkStatus(row, i) {
     });
 
     if (response.status !== 200) {
-      log(`[${i}] HTTP ${response.status} for ${url}`);
-      return;
+      log(`[${stream.id}] HTTP ${response.status} for ${cleanUrl}`);
+      return null;
     }
 
     const html = await response.text();
     
     // Check for WAF/challenge pages
     if (html.includes('_wafchallengeid') || html.includes('Please wait...') || html.includes('/waf-aiso/')) {
-      log(`[${i}] WARNING: Received challenge/WAF page, skipping`);
-      return; // Don't update status when we get a challenge page
+      log(`[${stream.id}] WARNING: Received challenge/WAF page, skipping`);
+      return null;
     }
     
-    let status = 'Offline';
+    let status = 'offline';
     
     if (platform === 'TikTok') {
-      // TikTok check
       if (html.includes('"isLiveBroadcast":true')) {
-        debug(`[${i}] Found TikTok isLiveBroadcast:true`);
-        status = 'Live';
-      } else {
-        // Debug: Check what we're getting for TikTok
-        if (html.includes('isLiveBroadcast')) {
-          const context = html.indexOf('isLiveBroadcast');
-          debug(`[${i}] Found 'isLiveBroadcast' at position ${context}`);
-          debug(`[${i}] Context: ...${html.substring(Math.max(0, context - 50), context + 100)}...`);
-        }
-        
-        // Check for other TikTok live indicators
-        if (html.includes('LiveRoomInfo') || html.includes('"status":2') || html.includes('viewer_count')) {
-          debug(`[${i}] Found other TikTok live indicators`);
-        }
+        debug(`[${stream.id}] Found TikTok isLiveBroadcast:true`);
+        status = 'live';
       }
     } else if (platform === 'Twitch') {
-      // Twitch check - for Twitch, isLiveBroadcast:true means it's currently live
-      // The endDate appears to be a projected end time, not an indication the stream has ended
       if (html.includes('"isLiveBroadcast":true')) {
-        debug(`[${i}] Found Twitch isLiveBroadcast:true`);
-        status = 'Live';
-      } else {
-        // Additional check: look for viewer count or live badge
-        if (html.includes('tw-channel-status-text-indicator') || 
-            html.includes('"stream":{') ||
-            html.includes('viewers</p>') ||
-            html.includes('data-a-target="tw-indicator"')) {
-          debug(`[${i}] Found other Twitch live indicators`);
-          status = 'Live';
-        }
+        debug(`[${stream.id}] Found Twitch isLiveBroadcast:true`);
+        status = 'live';
+      } else if (html.includes('tw-channel-status-text-indicator') || 
+                 html.includes('"stream":{') ||
+                 html.includes('viewers</p>') ||
+                 html.includes('data-a-target="tw-indicator"')) {
+        debug(`[${stream.id}] Found other Twitch live indicators`);
+        status = 'live';
       }
     } else if (platform === 'YouTube') {
-      // YouTube check - look for specific live indicators
-      debug(`[${i}] YouTube response length: ${html.length} characters`);
-      
       if (html.includes('"isLiveBroadcast":"True"') && !html.includes('"endDate":"')) {
-        debug(`[${i}] Detected LIVE - isLiveBroadcast:True without endDate`);
-        status = 'Live';
+        debug(`[${stream.id}] Detected LIVE - isLiveBroadcast:True without endDate`);
+        status = 'live';
       } else if (html.includes('"isLiveBroadcast" content="True"') && !html.includes('"endDate"')) {
-        debug(`[${i}] Detected LIVE - isLiveBroadcast content="True" without endDate`);
-        status = 'Live';
+        debug(`[${stream.id}] Detected LIVE - isLiveBroadcast content="True" without endDate`);
+        status = 'live';
       } else if (html.includes('"liveBroadcastDetails"') && html.includes('"isLiveNow":true')) {
-        debug(`[${i}] Detected LIVE - liveBroadcastDetails with isLiveNow`);
-        status = 'Live';
+        debug(`[${stream.id}] Detected LIVE - liveBroadcastDetails with isLiveNow`);
+        status = 'live';
       } else if (html.includes('\\\"isLive\\\":true') || html.includes('"isLive":true')) {
-        debug(`[${i}] Detected LIVE - isLive:true`);
-        status = 'Live';
+        debug(`[${stream.id}] Detected LIVE - isLive:true`);
+        status = 'live';
       } else if (html.includes('"videoDetails":') && html.includes('"isLiveContent":true') && html.includes('"isLive":true')) {
-        debug(`[${i}] Detected LIVE - videoDetails with isLiveContent and isLive`);
-        status = 'Live';
-      }
-      
-      // Debug helpers if needed
-      if (process.env.DEBUG) {
-        const checks = {
-          'isLiveBroadcast:"True"': html.includes('"isLiveBroadcast":"True"'),
-          'isLiveBroadcast content="True"': html.includes('"isLiveBroadcast" content="True"'),
-          'endDate present': html.includes('"endDate"') || html.includes('endDate"')
-        };
-        debug(`[${i}] YouTube indicators:`, Object.entries(checks).filter(([k,v]) => v).map(([k]) => k).join(', '));
+        debug(`[${stream.id}] Detected LIVE - videoDetails with isLiveContent and isLive`);
+        status = 'live';
       }
     }
     
-    log(`[${i}] Status: ${status} for ${platform} ${url}`);
+    log(`[${stream.id}] Status: ${status.toUpperCase()} for ${platform} ${cleanUrl}`);
     
-    // Store update for batching
-    pendingUpdates.set(url, { row, status, index: i });
+    return { streamId: stream.id, status, platform };
     
   } catch (e) {
-    log(`[${i}] Request error:`, e.message);
+    log(`[${stream.id}] Request error:`, e.message);
+    return null;
   }
 }
 
-async function batchUpdateRows(cycleStartTime) {
-  if (pendingUpdates.size === 0) return;
-  
-  log(`Preparing batch update for ${pendingUpdates.size} rows...`);
-  const nowIso = new Date().toISOString();
-  
-  debug('Sheet column headers:', JSON.stringify(sheet.headerValues));
+async function updateStreamStatus(streamId, status) {
+  try {
+    await streamSourceClient.updateStreamStatus(streamId, status);
+    debug(`Updated stream ${streamId} status to ${status}`);
+  } catch (error) {
+    log(`Failed to update stream ${streamId}:`, error.message);
+  }
+}
+
+async function archiveExpiredStreams() {
+  if (!ARCHIVE_ENABLED) return;
   
   try {
-    // Get fresh data to avoid race conditions
-    debug('Fetching fresh sheet data before update...');
-    const freshRows = await sheet.getRows();
+    log(`Checking for expired streams to archive (threshold: ${ARCHIVE_THRESHOLD_MINUTES} minutes)`);
     
-    // Create a map for quick lookup
-    const freshRowMap = new Map();
-    for (const row of freshRows) {
-      const url = getField(row, 'Link')?.trim();
-      if (url) freshRowMap.set(url, row);
+    const expiredStreams = await streamSourceClient.getExpiredOfflineStreams(ARCHIVE_THRESHOLD_MINUTES);
+    
+    if (expiredStreams.length === 0) {
+      log('No expired streams found to archive');
+      return;
     }
     
-    let updatedCount = 0;
-    let skippedCount = 0;
+    log(`Found ${expiredStreams.length} expired streams to archive`);
     
-    // Process each pending update
-    for (const [url, { status }] of pendingUpdates) {
-      const freshRow = freshRowMap.get(url);
-      
-      if (!freshRow) {
-        log(`Row deleted by user, skipping: ${url}`);
-        skippedCount++;
-        continue;
-      }
-      
-      // Check if someone else updated it more recently
-      const freshLastChecked = getField(freshRow, 'Last Checked (PST)');
-      if (freshLastChecked && new Date(freshLastChecked).getTime() > cycleStartTime) {
-        log(`Row updated by another process, skipping: ${url}`);
-        skippedCount++;
-        continue;
-      }
-      
-      // Build update object
-      const updates = {
-        'Status': status,
-        'Last Checked (PST)': nowIso
-      };
-      
-      if (status === 'Live') {
-        updates['Last Live (PST)'] = nowIso;
-      }
-      
-      const addedDate = getField(freshRow, 'Added Date');
-      if (!addedDate) {
-        updates['Added Date'] = nowIso;
-      }
-      
-      // Apply all updates at once
-      freshRow.assign(updates);
-      
-      // Save this row
+    let archivedCount = 0;
+    let errorCount = 0;
+    
+    for (const stream of expiredStreams) {
       try {
-        await freshRow.save();
-        updatedCount++;
-        debug(`Updated row for ${url} - Status: ${status}`);
-      } catch (saveError) {
-        log(`ERROR saving row for ${url}: ${saveError.message}`);
-        skippedCount++;
+        const currentTime = new Date();
+        const lastLiveTime = stream.last_live_at ? new Date(stream.last_live_at) : new Date(stream.updated_at);
+        const diffMinutes = (currentTime - lastLiveTime) / 60000;
+        
+        if ((stream.status !== 'offline' && stream.status !== 'unknown') || diffMinutes < ARCHIVE_THRESHOLD_MINUTES) {
+          log(`Stream ${stream.id} state changed, skipping archive`);
+          continue;
+        }
+        
+        await streamSourceClient.archiveStream(stream.id);
+        archivedCount++;
+        log(`Archived stream ${stream.id}: ${stream.link} (offline for ${diffMinutes.toFixed(1)} min)`);
+        
+        await delay(100);
+      } catch (error) {
+        errorCount++;
+        log(`Failed to archive stream ${stream.id}: ${error.message}`);
       }
     }
     
-    // Log summary
-    if (updatedCount > 0 || skippedCount > 0) {
-      log(`Batch update complete: ${updatedCount} rows updated, ${skippedCount} skipped`);
-    } else {
-      log(`No rows to update (all were deleted or modified)`);
-    }
-    
-    pendingUpdates.clear();
-    
-  } catch (e) {
-    log(`Batch update error:`, e.message);
-    pendingUpdates.clear();
+    log(`Archive complete: ${archivedCount} archived, ${errorCount} errors`);
+  } catch (error) {
+    log('Error during archive process:', error.message);
   }
 }
 
 async function main() {
-  log(`Live Checker started`);
+  log(`StreamSource Live Checker started`);
+  log(`Check rates - Live: ${RATE_LIVE/1000}s, Offline: ${RATE_OFF/1000}s`);
 
   while (true) {
     try {
-      // Record cycle start time for race condition detection
-      const cycleStartTime = Date.now();
-      
-      // Single read per cycle
-      const rows = await sheet.getRows();
-      log('Cycle start —', rows.length, 'rows fetched');
+      // Fetch active (non-archived) streams from StreamSource
+      log('Fetching streams from StreamSource...');
+      let allStreams = [];
+      let page = 1;
+      let hasMore = true;
 
+      while (hasMore) {
+        const response = await streamSourceClient.getStreams({
+          page,
+          per_page: 100,
+          is_archived: false
+        });
+
+        allStreams = allStreams.concat(response.streams);
+        hasMore = page < response.meta.total_pages;
+        page++;
+      }
+
+      log(`Fetched ${allStreams.length} active streams`);
+
+      // Sort streams by priority
       const now = Date.now();
-      const prioritized = rows.map((row, i) => ({ row, i })).sort((a, b) => {
-        const getPriority = r => {
-          if (!getField(r, 'Last Checked (PST)')) return 3;
-          if (getField(r, 'Status')?.toLowerCase() === 'live') return 2;
-          const lastLive = getField(r, 'Last Live (PST)');
-          if (lastLive && now - new Date(lastLive).getTime() <= 20 * 60 * 1000) return 1;
+      const prioritizedStreams = allStreams.sort((a, b) => {
+        const getPriority = stream => {
+          if (!stream.last_checked_at) return 3; // Never checked
+          if (stream.status?.toLowerCase() === 'live') return 2; // Currently live
+          const lastLive = stream.last_live_at;
+          if (lastLive && now - new Date(lastLive).getTime() <= 20 * 60 * 1000) return 1; // Recently live
           return 0;
         };
-        return getPriority(b.row) - getPriority(a.row);
+        return getPriority(b) - getPriority(a);
       });
 
-      if (prioritized.length > 0) {
-        debug('Sample prioritized row:', sheet.headerValues.map((h, idx) => `${h}=${prioritized[0].row._rawData[idx]}`).join('; '))
+      // Check each stream
+      const updates = [];
+      for (const stream of prioritizedStreams) {
+        const result = await checkStreamStatus(stream);
+        if (result) {
+          updates.push(result);
+        }
       }
 
-      // Check all streams
-      for (const { row, i } of prioritized) {
-        await checkStatus(row, i);
+      // Update all statuses
+      log(`Updating ${updates.length} stream statuses...`);
+      for (const update of updates) {
+        await updateStreamStatus(update.streamId, update.status);
       }
 
-      // Batch update all pending changes with race condition protection
-      await batchUpdateRows(cycleStartTime);
+      // Check if we should run the archive process
+      if (ARCHIVE_ENABLED && Date.now() - lastArchiveCheck >= ARCHIVE_CHECK_INTERVAL) {
+        await archiveExpiredStreams();
+        lastArchiveCheck = Date.now();
+      }
 
       const sleepTime = LOOP_DELAY_MIN + Math.random() * (LOOP_DELAY_MAX - LOOP_DELAY_MIN);
       log(`Cycle complete — sleeping ${(sleepTime / 1000).toFixed(0)}s`);
@@ -365,6 +284,14 @@ async function main() {
       
     } catch (e) {
       log('Main loop error:', e.message);
+      if (e.message.includes('401') || e.message.includes('Unauthorized')) {
+        log('Re-authenticating...');
+        try {
+          await streamSourceClient.authenticate();
+        } catch (authError) {
+          log('Re-authentication failed:', authError.message);
+        }
+      }
       await delay(30000); // Wait 30s on error
     }
   }
