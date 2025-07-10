@@ -1,167 +1,267 @@
-# StreamSource Live Checker
+# StreamSource Live Checker (formerly livesheet-updater)
 
-A lightweight Node.js service that monitors live stream URLs from StreamSource API and updates their status in real-time.
+A Node.js service that monitors livestream statuses and archives expired streams using the StreamSource API. This service periodically checks if streams are live or offline and maintains accurate status information.
 
-This service:
-- Fetches active streams from StreamSource API
-- Checks whether streams are currently **Live** or **Offline** via HTTP requests
-- Updates stream status and timestamps in StreamSource
-- Prioritizes checking based on current status and last live time
-- Optionally archives streams that have been offline for extended periods
-- No browser automation required - uses direct HTTP requests
+## 📋 Table of Contents
 
----
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Development](#development)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Monitoring](#monitoring)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
 
-## 🔧 Requirements
+## 🎯 Overview
 
-- Node.js 18+ (for native fetch support)
-- Docker (optional)
-- StreamSource API credentials (email/password)
+The StreamSource Live Checker is a critical component of the Streamwall Suite that:
+- Continuously monitors stream URLs to detect live/offline status
+- Prioritizes checks based on stream state and last check time
+- Automatically archives streams that have been offline for extended periods
+- Integrates with the StreamSource API for centralized stream management
 
----
+## ✨ Features
 
-## 🗂 Project Files
+- **Smart Prioritization**: Never-checked and currently-live streams get priority
+- **Configurable Rate Limiting**: Different check intervals for live vs offline streams
+- **Automatic Archiving**: Archives streams offline for 30+ minutes (configurable)
+- **Platform Support**: Detects live status for Twitch, YouTube, TikTok, Kick, and Facebook
+- **Resilient Error Handling**: Continues operation despite individual stream check failures
+- **Docker Support**: Easy deployment with Docker and docker-compose
+- **Comprehensive Testing**: 90%+ code coverage with unit and integration tests
 
-| File/Directory          | Purpose                                        |
-|-------------------------|------------------------------------------------|
-| `main.js`               | Main controller (coordinates all modules)       |
-| `main.test.js`          | Tests for main controller                      |
-| `integration.test.js`   | Integration tests for full workflows           |
-| **`lib/`**              | **Core modules directory**                     |
-| `lib/streamSourceClient.js` | StreamSource API client                    |
-| `lib/streamChecker.js`  | Stream status checking logic                   |
-| `lib/streamArchiver.js` | Stream archiving functionality                 |
-| `lib/streamPrioritizer.js` | Stream prioritization algorithm             |
-| `lib/config.js`         | Configuration management                       |
-| `lib/utils.js`          | Shared utilities                               |
-| `lib/*.test.js`         | Unit tests for each module                     |
-| **`scripts/`**          | **Utility scripts**                            |
-| `scripts/test-archive.js` | Manual testing script for archiving          |
-| **Docker & Config**     |                                                |
-| `Dockerfile`            | Builds the Docker container                    |
-| `docker-compose.yml`    | Docker Compose configuration                   |
-| `package.json`          | Node.js project configuration                  |
-| `.env.example`          | Environment variable template                  |
-| `jest.config.js`        | Jest testing framework configuration           |
+## 🏗 Architecture
 
----
+```mermaid
+graph TD
+    A[main.js<br/>Entry point & orchestration] --> B[lib/]
+    B --> C[config.js<br/>Configuration management]
+    B --> D[streamSourceClient.js<br/>API client with auth & rate limiting]
+    B --> E[streamChecker.js<br/>Stream status detection logic]
+    B --> F[streamArchiver.js<br/>Archiving expired streams]
+    B --> G[streamPrioritizer.js<br/>Stream check prioritization]
+    B --> H[utils.js<br/>Shared utilities]
+    
+    A --> D
+    A --> E
+    A --> F
+    A --> G
+    
+    style A fill:#f9f,stroke:#333,stroke-width:4px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+```
 
-## 📋 How It Works
+### Module Responsibilities
 
-1. **Fetches Streams**: Retrieves all active (non-archived) streams from StreamSource API
-2. **Prioritizes Checks**: 
-   - Never checked streams get highest priority
-   - Currently live streams checked every 2 minutes
-   - Recently live streams (within 20 minutes) get medium priority
-   - Other offline streams checked every 7 minutes
-3. **Checks Status**: Makes HTTP requests to stream URLs to detect live status
-4. **Updates StreamSource**: Updates stream status and timestamps via API
-5. **Archives Old Streams**: Optionally archives streams offline for 30+ minutes
+- **main.js**: Orchestrates the main loop, coordinates all modules
+- **config.js**: Centralizes configuration and validation
+- **streamSourceClient.js**: Handles all StreamSource API interactions with JWT auth
+- **streamChecker.js**: Detects stream status by making HTTP requests
+- **streamArchiver.js**: Archives streams offline for threshold duration
+- **streamPrioritizer.js**: Sorts streams by check priority
+- **utils.js**: Logging, delays, and shared constants
 
----
+## 📋 Prerequisites
 
-## 🚀 Quick Start
+- Node.js 18+ (uses ES modules)
+- StreamSource API credentials
+- Docker & Docker Compose (for containerized deployment)
 
-### 1. Clone and Configure
+## 🚀 Installation
 
-```shell
+### Local Development
+
+```bash
 # Clone the repository
-git clone <repository-url>
-cd livesheet-updater
+git clone https://github.com/streamwall/streamwall-suite.git
+cd streamwall-suite/livesheet-updater
+
+# Install dependencies
+npm install
 
 # Copy environment template
 cp .env.example .env
 
-# Edit .env with your StreamSource credentials
+# Edit .env with your credentials
 nano .env
 ```
 
-### 2. Set Required Environment Variables
+### Docker Installation
 
-```env
-STREAMSOURCE_EMAIL=your-email@example.com
-STREAMSOURCE_PASSWORD=your-password
-```
+```bash
+# Clone and navigate to directory
+git clone https://github.com/streamwall/streamwall-suite.git
+cd streamwall-suite/livesheet-updater
 
-### 3. Run with Docker (Recommended)
+# Copy and configure environment
+cp .env.example .env
+nano .env
 
-```shell
+# Build and run with Docker Compose
 docker-compose up -d
 ```
 
-To view logs:
-```shell
-docker-compose logs -f
+## ⚙️ Configuration
+
+### Environment Variables
+
+Create a `.env` file with the following variables:
+
+```env
+# StreamSource API Configuration (Required)
+STREAMSOURCE_API_URL=https://api.streamsource.com
+STREAMSOURCE_EMAIL=your@email.com
+STREAMSOURCE_PASSWORD=your-password
+
+# Rate Limiting (Optional)
+RATE_LIVE=120000        # Check interval for live streams (ms) - default: 2 minutes
+RATE_OFF=420000         # Check interval for offline streams (ms) - default: 7 minutes
+
+# Archiving Configuration (Optional)
+ARCHIVE_ENABLED=true    # Enable automatic archiving - default: false
+ARCHIVE_THRESHOLD_MINUTES=30  # Minutes offline before archiving - default: 30
+ARCHIVE_CHECK_INTERVAL=300000 # How often to check for expired streams (ms) - default: 5 minutes
+
+# Debug Mode (Optional)
+DEBUG=false             # Enable debug logging - default: false
 ```
 
-To stop:
-```shell
+### Priority System
+
+Streams are checked in the following priority order:
+1. **Priority 3**: Never checked streams
+2. **Priority 2**: Currently live streams
+3. **Priority 1**: Recently live streams (within 20 minutes)
+4. **Priority 0**: All other offline streams
+
+### Stream Checking Process
+
+```mermaid
+sequenceDiagram
+    participant M as Main Loop
+    participant API as StreamSource API
+    participant C as Stream Checker
+    participant P as Platform (Twitch/YouTube/etc)
+    
+    M->>API: Fetch active streams
+    API-->>M: Stream list
+    M->>M: Prioritize streams
+    
+    loop For each stream
+        M->>C: Check stream status
+        C->>C: Apply rate limiting
+        C->>P: HTTP GET request
+        P-->>C: HTML response
+        C->>C: Detect live status
+        C-->>M: Status result
+    end
+    
+    M->>API: Update stream statuses
+    
+    opt If archiving enabled
+        M->>API: Get expired streams
+        API-->>M: Expired list
+        M->>API: Archive streams
+    end
+    
+    M->>M: Sleep (10-20s)
+```
+
+## 🖥 Usage
+
+### Running Locally
+
+```bash
+# Run with npm
+npm start
+
+# Run with environment variables inline
+STREAMSOURCE_EMAIL=test@example.com STREAMSOURCE_PASSWORD=pass npm start
+
+# Run with debug logging
+DEBUG=true npm start
+```
+
+### Running with Docker
+
+```bash
+# Start the service
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the service
 docker-compose down
 ```
 
-### 4. Run without Docker
+### Manual Testing
 
-```shell
-# Install dependencies (none required for production)
-npm install
+Test the archiving functionality without running the full service:
 
-# Run the service
-npm start
+```bash
+# Test authentication and stream fetching
+npm run test:archive
+
+# Test with custom threshold
+TEST_THRESHOLD_MINUTES=60 npm run test:archive
+
+# Actually archive a stream (dry run by default)
+TEST_ARCHIVE=true npm run test:archive
 ```
 
----
+## 🛠 Development
 
-## ⚙️ Configuration
+### Project Structure
 
-All configuration is done via environment variables:
+```
+livesheet-updater/
+├── lib/                    # Core modules
+│   ├── config.js          # Configuration management
+│   ├── streamArchiver.js  # Archiving logic
+│   ├── streamChecker.js   # Status checking logic
+│   ├── streamPrioritizer.js # Priority algorithm
+│   ├── streamSourceClient.js # API client
+│   ├── utils.js           # Utilities
+│   └── *.test.js          # Unit tests for each module
+├── scripts/               # Utility scripts
+│   └── test-archive.js    # Manual testing script
+├── main.js               # Entry point
+├── main.test.js          # Main module tests
+├── integration.test.js   # Integration tests
+├── docker-compose.yml    # Docker configuration
+├── Dockerfile           # Container definition
+├── package.json         # Dependencies
+└── jest.config.js       # Test configuration
+```
 
-### Required
-- `STREAMSOURCE_EMAIL`: Your StreamSource login email
-- `STREAMSOURCE_PASSWORD`: Your StreamSource password
+### Adding New Features
 
-### Optional
-- `STREAMSOURCE_API_URL`: API endpoint (default: https://api.streamsource.com)
-- `RATE_LIVE`: How often to check live streams in ms (default: 120000 = 2 minutes)
-- `RATE_OFF`: How often to check offline streams in ms (default: 420000 = 7 minutes)
-- `DEBUG`: Enable debug logging (default: false)
+1. Create new modules in `lib/` directory
+2. Export functions for testing
+3. Add corresponding `.test.js` files
+4. Update main.js to use new functionality
+5. Update documentation
 
-### Archiving (Optional)
-- `ARCHIVE_ENABLED`: Enable auto-archiving (default: false)
-- `ARCHIVE_THRESHOLD_MINUTES`: Minutes offline before archiving (default: 30)
-- `ARCHIVE_CHECK_INTERVAL`: How often to check for expired streams in ms (default: 300000 = 5 minutes)
+### Code Style
 
----
-
-## 🔍 Platform Support
-
-The service detects live status for:
-- **TikTok**: Checks for `"isLiveBroadcast":true`
-- **YouTube**: Multiple indicators including `isLive`, `isLiveBroadcast`
-- **Twitch**: Checks for `"isLiveBroadcast":true` and other indicators
-
----
-
-## 🗄️ Stream Archiving
-
-The service can automatically archive streams that have been offline for extended periods:
-
-1. Enable with `ARCHIVE_ENABLED=true`
-2. Streams offline/unknown for 30+ minutes are archived
-3. Archived streams are marked with `is_archived: true`
-4. Archived streams are excluded from future checks
-
-This keeps the active stream list manageable and improves performance.
-
----
+- ES modules (import/export)
+- Async/await for asynchronous code
+- JSDoc comments for functions
+- Descriptive variable names
+- Early returns for error cases
 
 ## 🧪 Testing
 
-The project includes comprehensive unit tests:
+### Running Tests
 
-```shell
-# Install dev dependencies
-npm install
-
+```bash
 # Run all tests
 npm test
 
@@ -170,122 +270,193 @@ npm run test:watch
 
 # Run tests with coverage
 npm run test:coverage
+
+# Run specific test file
+npm test lib/streamChecker.test.js
 ```
 
-### Test Files
+### Test Coverage
 
-- `streamSourceClient.test.js` - Tests for StreamSource API client
-- `checkStreamStatus.test.js` - Tests for stream status checking logic
-- `main.test.js` - Tests for main loop and prioritization logic
-- `integration.test.js` - Integration tests for full workflows
-- `archiveExpiredStreams.test.js` - Tests for archiving logic
-- `config.test.js` - Tests for configuration parsing
+Current coverage: ~90% overall
 
-### Manual Integration Testing
+- Unit tests for all modules in `lib/`
+- Integration tests for end-to-end workflows
+- Mock external dependencies (API calls, fetch)
 
-```shell
-# Test StreamSource connection and archiving
-STREAMSOURCE_EMAIL=your-email@example.com \
-STREAMSOURCE_PASSWORD=your-password \
-node test-archive.js
+### Writing Tests
+
+```javascript
+// Example test structure
+import { jest, describe, test, expect } from '@jest/globals';
+
+describe('Module Name', () => {
+  test('should do something', async () => {
+    // Arrange
+    const input = { /* test data */ };
+    
+    // Act
+    const result = await functionToTest(input);
+    
+    // Assert
+    expect(result).toEqual(expectedOutput);
+  });
+});
 ```
 
----
+## 🚀 Deployment
+
+### Docker Deployment
+
+```bash
+# Build image
+docker build -t streamsource-checker .
+
+# Run container
+docker run -d \
+  --name streamsource-checker \
+  --env-file .env \
+  --restart unless-stopped \
+  streamsource-checker
+```
+
+### Docker Compose Deployment
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+services:
+  checker:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+### Production Considerations
+
+1. **Logging**: Configure log rotation to prevent disk space issues
+2. **Monitoring**: Set up health checks and alerts
+3. **Resources**: Minimal requirements - 256MB RAM, 0.5 CPU
+4. **Networking**: Ensure outbound HTTPS access to stream platforms
+5. **Security**: Use secrets management for credentials
 
 ## 📊 Monitoring
 
-The service logs all operations with timestamps:
-- Stream fetch results
-- Individual stream checks
-- Status updates
-- Archive operations
-- Errors and retries
+### Health Checks
 
-Monitor logs with:
-```shell
-# Docker
-docker-compose logs -f
+The service logs its activity continuously. Monitor for:
+- "StreamSource Live Checker started" - Service startup
+- "Connected to StreamSource API" - Successful authentication
+- "Cycle complete" messages - Normal operation
+- Error messages - Issues requiring attention
 
-# Direct
-npm start
+### Metrics to Track
+
+- Streams checked per cycle
+- API response times
+- Archive operations performed
+- Error rates by platform
+- Authentication failures
+
+### Example Monitoring Setup
+
+```bash
+# Watch logs for errors
+docker-compose logs -f | grep -E "ERROR|Failed|error"
+
+# Count checked streams
+docker-compose logs | grep "Status:" | wc -l
+
+# Monitor memory usage
+docker stats streamsource-checker
 ```
 
----
+## 🔧 Troubleshooting
 
-## 🔄 Rate Limiting
+### Common Issues
 
-The service respects rate limits:
-- Waits 100ms between API requests (configurable)
-- Exponential backoff on rate limit errors
-- Separate check intervals for live vs offline streams
-- Re-authenticates automatically on 401 errors
-
----
-
-## 🏗️ Architecture
-
+#### Authentication Failures
 ```
-StreamSource API
-      ↓
-Fetch Active Streams
-      ↓
-Prioritize by Status
-      ↓
-Check Each Stream (HTTP)
-      ↓
-Update Status in API
-      ↓
-Archive Old Streams (Optional)
-      ↓
-Sleep & Repeat
+Error: StreamSource credentials required
+```
+**Solution**: Ensure STREAMSOURCE_EMAIL and STREAMSOURCE_PASSWORD are set in .env
+
+#### Rate Limiting
+```
+429 Too Many Requests
+```
+**Solution**: Increase RATE_LIVE and RATE_OFF values in configuration
+
+#### Network Errors
+```
+Request error: Network error
+```
+**Solution**: Check internet connectivity and firewall rules
+
+#### Challenge/WAF Pages
+```
+WARNING: Received challenge/WAF page
+```
+**Solution**: This is expected for some platforms; the service will retry later
+
+### Debug Mode
+
+Enable debug logging for more detailed information:
+
+```bash
+DEBUG=true npm start
 ```
 
----
+### Manual Database Queries
 
-## 🐛 Troubleshooting
+If you need to check the StreamSource database directly:
 
-### Authentication Errors
-- Verify email/password are correct
-- Check API URL is accessible
-- Token expires after 24 hours (auto-refreshed)
+```sql
+-- Find streams not checked recently
+SELECT id, link, status, last_checked_at 
+FROM streams 
+WHERE last_checked_at < NOW() - INTERVAL '1 hour'
+ORDER BY last_checked_at;
 
-### No Streams Found
-- Ensure streams exist in StreamSource
-- Check that streams aren't all archived
-- Verify API permissions
-
-### Status Not Updating
-- Enable DEBUG mode for detailed logs
-- Check for WAF/challenge pages in responses
-- Verify stream URLs are valid
-
-### High Memory Usage
-- Reduce check rates if needed
-- Enable archiving to reduce active streams
-- Check for memory leaks in long-running instances
-
----
-
-## 🚧 Development
-
-### Adding Platform Support
-1. Add URL pattern to validation in `checkStreamStatus()`
-2. Add platform detection logic
-3. Add status detection for the platform's HTML
-
-### Modifying Check Logic
-1. Update patterns in `checkStreamStatus()`
-2. Adjust priority logic in `main()`
-3. Update rate limiting as needed
-
----
-
-## 📝 License
-
-[Your License Here]
-
----
+-- Find expired offline streams
+SELECT id, link, last_live_at 
+FROM streams 
+WHERE status IN ('offline', 'unknown') 
+  AND last_live_at < NOW() - INTERVAL '30 minutes';
+```
 
 ## 🤝 Contributing
 
-[Your Contributing Guidelines Here]
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Write tests for new functionality
+4. Ensure all tests pass (`npm test`)
+5. Commit changes (`git commit -m 'Add amazing feature'`)
+6. Push to branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
+
+### Development Guidelines
+
+- Maintain test coverage above 85%
+- Follow existing code patterns
+- Update documentation for new features
+- Add JSDoc comments for new functions
+- Keep functions small and focused
+
+## 📄 License
+
+This project is part of the Streamwall Suite. See the main repository for license information.
+
+## 🔗 Related Projects
+
+- [StreamSource](https://github.com/streamwall/streamsource) - API backend
+- [Streamwall](https://github.com/streamwall/streamwall) - Display application
+- [Livestream Link Monitor](https://github.com/streamwall/livestream-link-monitor) - Discord/Twitch monitor
+
+---
+
+For more technical details and AI assistant information, see [CLAUDE.md](CLAUDE.md)

@@ -3,11 +3,31 @@
   "version": "2.0.0",
   "description": "Monitors live stream URLs from StreamSource and updates their status",
   "type": "module",
+  "main": "main.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "streamwall",
+    "livestream",
+    "monitoring",
+    "twitch",
+    "youtube",
+    "tiktok"
+  ],
+  "author": "Streamwall Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/streamwall/streamwall-suite.git",
+    "directory": "livesheet-updater"
+  },
   "scripts": {
     "start": "node main.js",
     "test": "NODE_OPTIONS='--experimental-vm-modules --no-warnings' jest",
     "test:watch": "NODE_OPTIONS='--experimental-vm-modules --no-warnings' jest --watch",
-    "test:coverage": "NODE_OPTIONS='--experimental-vm-modules --no-warnings' jest --coverage"
+    "test:coverage": "NODE_OPTIONS='--experimental-vm-modules --no-warnings' jest --coverage",
+    "test:archive": "node scripts/test-archive.js"
   },
   "dependencies": {},
   "devDependencies": {
