@@ -1,4 +1,4 @@
-import StreamSourceClient from './streamSourceClient.js';
+import StreamSourceClient from './lib/streamSourceClient.js';
 import { config, validateConfig } from './lib/config.js';
 import { log, delay } from './lib/utils.js';
 import { checkStreamStatus } from './lib/streamChecker.js';
@@ -22,14 +22,14 @@ let lastArchiveCheck = 0;
  * Fetch all active streams from StreamSource
  * @returns {Promise<Array>} Array of stream objects
  */
-async function fetchActiveStreams() {
+export async function fetchActiveStreams(client = streamSourceClient) {
   log('Fetching streams from StreamSource...');
   const allStreams = [];
   let page = 1;
   let hasMore = true;
 
   while (hasMore) {
-    const response = await streamSourceClient.getStreams({
+    const response = await client.getStreams({
       page,
       per_page: 100,
       is_archived: false
@@ -49,9 +49,9 @@ async function fetchActiveStreams() {
  * @param {number} streamId - Stream ID
  * @param {string} status - New status
  */
-async function updateStreamStatus(streamId, status) {
+export async function updateStreamStatus(streamId, status, client = streamSourceClient) {
   try {
-    await streamSourceClient.updateStreamStatus(streamId, status);
+    await client.updateStreamStatus(streamId, status);
   } catch (error) {
     log(`Failed to update stream ${streamId}:`, error.message);
   }
@@ -60,10 +60,10 @@ async function updateStreamStatus(streamId, status) {
 /**
  * Main processing loop
  */
-async function processStreams() {
+export async function processStreams(client = streamSourceClient) {
   try {
     // Fetch all active streams
-    const streams = await fetchActiveStreams();
+    const streams = await fetchActiveStreams(client);
 
     // Prioritize streams for checking
     const prioritizedStreams = prioritizeStreams(streams);
@@ -81,13 +81,13 @@ async function processStreams() {
     if (updates.length > 0) {
       log(`Updating ${updates.length} stream statuses...`);
       for (const update of updates) {
-        await updateStreamStatus(update.streamId, update.status);
+        await updateStreamStatus(update.streamId, update.status, client);
       }
     }
 
     // Check if we should run the archive process
     if (shouldRunArchive(config.ARCHIVE_ENABLED, lastArchiveCheck, config.ARCHIVE_CHECK_INTERVAL)) {
-      await archiveExpiredStreams(streamSourceClient, config.ARCHIVE_THRESHOLD_MINUTES);
+      await archiveExpiredStreams(client, config.ARCHIVE_THRESHOLD_MINUTES);
       lastArchiveCheck = Date.now();
     }
 
@@ -98,7 +98,7 @@ async function processStreams() {
     if (error.message.includes('401') || error.message.includes('Unauthorized')) {
       log('Re-authenticating...');
       try {
-        await streamSourceClient.authenticate();
+        await client.authenticate();
       } catch (authError) {
         log('Re-authentication failed:', authError.message);
       }
@@ -135,8 +135,13 @@ async function main() {
   }
 }
 
-// Start the application
-main().catch(error => {
-  console.error('Fatal error:', error);
-  process.exit(1);
-});
+// Start the application only if this is the main module
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch(error => {
+    console.error('Fatal error:', error);
+    process.exit(1);
+  });
+}
+
+// Export for testing
+export { main };

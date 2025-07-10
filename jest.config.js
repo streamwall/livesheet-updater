@@ -10,10 +10,13 @@ export default {
   ],
   collectCoverageFrom: [
     '*.js',
+    'lib/**/*.js',
     '!jest.config.js',
     '!test-*.js',
     '!*.test.js',
-    '!coverage/**'
+    '!**/*.test.js',
+    '!coverage/**',
+    '!scripts/**'
   ],
   testPathIgnorePatterns: [
     '/node_modules/',

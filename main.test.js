@@ -1,7 +1,52 @@
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { prioritizeStreams } from './lib/streamPrioritizer.js';
 
-describe('Main Loop Logic', () => {
+// Mock the dependencies
+jest.unstable_mockModule('./lib/config.js', () => ({
+  config: {
+    RATE_LIVE: 120000,
+    RATE_OFF: 420000,
+    LOOP_DELAY_MIN: 10000,
+    LOOP_DELAY_MAX: 20000,
+    ARCHIVE_ENABLED: true,
+    ARCHIVE_THRESHOLD_MINUTES: 30,
+    ARCHIVE_CHECK_INTERVAL: 300000,
+    STREAMSOURCE_API_URL: 'https://api.test.com',
+    STREAMSOURCE_EMAIL: 'test@example.com',
+    STREAMSOURCE_PASSWORD: 'testpass'
+  },
+  validateConfig: jest.fn()
+}));
+
+jest.unstable_mockModule('./lib/utils.js', () => ({
+  log: jest.fn(),
+  delay: jest.fn().mockResolvedValue()
+}));
+
+jest.unstable_mockModule('./lib/streamChecker.js', () => ({
+  checkStreamStatus: jest.fn()
+}));
+
+jest.unstable_mockModule('./lib/streamArchiver.js', () => ({
+  archiveExpiredStreams: jest.fn(),
+  shouldRunArchive: jest.fn()
+}));
+
+jest.unstable_mockModule('./lib/streamSourceClient.js', () => ({
+  default: jest.fn().mockImplementation(() => ({
+    authenticate: jest.fn().mockResolvedValue(),
+    getStreams: jest.fn(),
+    updateStreamStatus: jest.fn().mockResolvedValue()
+  }))
+}));
+
+// Import after mocking
+const { fetchActiveStreams, updateStreamStatus, processStreams } = await import('./main.js');
+const { log } = await import('./lib/utils.js');
+const { checkStreamStatus } = await import('./lib/streamChecker.js');
+const { archiveExpiredStreams, shouldRunArchive } = await import('./lib/streamArchiver.js');
+
+describe('Main Module Functions', () => {
   let mockStreamSourceClient;
   let mockLog;
   let mockDelay;
@@ -19,6 +64,108 @@ describe('Main Loop Logic', () => {
       archiveStream: jest.fn(),
       authenticate: jest.fn()
     };
+  });
+
+  describe('fetchActiveStreams', () => {
+    test('should fetch all pages of streams', async () => {
+      mockStreamSourceClient.getStreams
+        .mockResolvedValueOnce({
+          streams: [{ id: 1 }, { id: 2 }],
+          meta: { total_pages: 3 }
+        })
+        .mockResolvedValueOnce({
+          streams: [{ id: 3 }, { id: 4 }],
+          meta: { total_pages: 3 }
+        })
+        .mockResolvedValueOnce({
+          streams: [{ id: 5 }],
+          meta: { total_pages: 3 }
+        });
+
+      const streams = await fetchActiveStreams(mockStreamSourceClient);
+
+      expect(streams).toHaveLength(5);
+      expect(streams.map(s => s.id)).toEqual([1, 2, 3, 4, 5]);
+      expect(mockStreamSourceClient.getStreams).toHaveBeenCalledTimes(3);
+      expect(mockStreamSourceClient.getStreams).toHaveBeenCalledWith({
+        page: 1,
+        per_page: 100,
+        is_archived: false
+      });
+    });
+  });
+
+  describe('updateStreamStatus', () => {
+    test('should update stream status successfully', async () => {
+      await updateStreamStatus(123, 'live', mockStreamSourceClient);
+      
+      expect(mockStreamSourceClient.updateStreamStatus).toHaveBeenCalledWith(123, 'live');
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining('Failed'));
+    });
+
+    test('should log error on failure', async () => {
+      mockStreamSourceClient.updateStreamStatus.mockRejectedValueOnce(new Error('API Error'));
+      
+      await updateStreamStatus(123, 'live', mockStreamSourceClient);
+      
+      expect(log).toHaveBeenCalledWith('Failed to update stream 123:', 'API Error');
+    });
+  });
+
+  describe('processStreams', () => {
+    beforeEach(() => {
+      // Reset mocks
+      checkStreamStatus.mockClear();
+      shouldRunArchive.mockClear();
+      archiveExpiredStreams.mockClear();
+    });
+
+    test('should process streams and update statuses', async () => {
+      const mockStreams = [
+        { id: 1, status: 'offline' },
+        { id: 2, status: 'live' }
+      ];
+      
+      mockStreamSourceClient.getStreams.mockResolvedValueOnce({
+        streams: mockStreams,
+        meta: { total_pages: 1 }
+      });
+      
+      checkStreamStatus
+        .mockResolvedValueOnce({ streamId: 1, status: 'live' })
+        .mockResolvedValueOnce(null);
+      
+      shouldRunArchive.mockReturnValue(false);
+
+      await processStreams(mockStreamSourceClient);
+
+      expect(checkStreamStatus).toHaveBeenCalledTimes(2);
+      expect(mockStreamSourceClient.updateStreamStatus).toHaveBeenCalledWith(1, 'live');
+      expect(mockStreamSourceClient.updateStreamStatus).toHaveBeenCalledTimes(1);
+    });
+
+    test('should run archive when conditions are met', async () => {
+      mockStreamSourceClient.getStreams.mockResolvedValueOnce({
+        streams: [],
+        meta: { total_pages: 0 }
+      });
+      
+      shouldRunArchive.mockReturnValue(true);
+      archiveExpiredStreams.mockResolvedValue({ archivedCount: 2, errorCount: 0 });
+
+      await processStreams(mockStreamSourceClient);
+
+      expect(archiveExpiredStreams).toHaveBeenCalledWith(mockStreamSourceClient, 30);
+    });
+
+    test('should re-authenticate on 401 error', async () => {
+      mockStreamSourceClient.getStreams.mockRejectedValueOnce(new Error('401 Unauthorized'));
+      
+      await expect(processStreams(mockStreamSourceClient)).rejects.toThrow('401 Unauthorized');
+      
+      expect(log).toHaveBeenCalledWith('Re-authenticating...');
+      expect(mockStreamSourceClient.authenticate).toHaveBeenCalled();
+    });
   });
 
   describe('Stream Prioritization', () => {

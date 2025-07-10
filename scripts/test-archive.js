@@ -1,4 +1,4 @@
-import StreamSourceClient from './streamSourceClient.js';
+import StreamSourceClient from './lib/streamSourceClient.js';
 
 // Test script for StreamSource archiving functionality
 async function test() {

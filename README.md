@@ -22,15 +22,26 @@ This service:
 
 ## 🗂 Project Files
 
-| File                    | Purpose                                        |
+| File/Directory          | Purpose                                        |
 |-------------------------|------------------------------------------------|
-| `main.js`               | Main app logic (fetches streams, checks status)|
-| `streamSourceClient.js` | StreamSource API client                        |
+| `main.js`               | Main controller (coordinates all modules)       |
+| `main.test.js`          | Tests for main controller                      |
+| `integration.test.js`   | Integration tests for full workflows           |
+| **`lib/`**              | **Core modules directory**                     |
+| `lib/streamSourceClient.js` | StreamSource API client                    |
+| `lib/streamChecker.js`  | Stream status checking logic                   |
+| `lib/streamArchiver.js` | Stream archiving functionality                 |
+| `lib/streamPrioritizer.js` | Stream prioritization algorithm             |
+| `lib/config.js`         | Configuration management                       |
+| `lib/utils.js`          | Shared utilities                               |
+| `lib/*.test.js`         | Unit tests for each module                     |
+| **`scripts/`**          | **Utility scripts**                            |
+| `scripts/test-archive.js` | Manual testing script for archiving          |
+| **Docker & Config**     |                                                |
 | `Dockerfile`            | Builds the Docker container                    |
 | `docker-compose.yml`    | Docker Compose configuration                   |
 | `package.json`          | Node.js project configuration                  |
 | `.env.example`          | Environment variable template                  |
-| `*.test.js`             | Unit tests for the application                 |
 | `jest.config.js`        | Jest testing framework configuration           |
 
 ---
