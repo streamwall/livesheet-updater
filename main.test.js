@@ -1,4 +1,5 @@
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { prioritizeStreams } from './lib/streamPrioritizer.js';
 
 describe('Main Loop Logic', () => {
   let mockStreamSourceClient;
@@ -54,17 +55,8 @@ describe('Main Loop Logic', () => {
         }
       ];
 
-      // Sort function from main.js
-      const prioritizedStreams = streams.sort((a, b) => {
-        const getPriority = stream => {
-          if (!stream.last_checked_at) return 3; // Never checked
-          if (stream.status?.toLowerCase() === 'live') return 2; // Currently live
-          const lastLive = stream.last_live_at;
-          if (lastLive && now - new Date(lastLive).getTime() <= 20 * 60 * 1000) return 1; // Recently live
-          return 0;
-        };
-        return getPriority(b) - getPriority(a);
-      });
+      // Use the imported prioritizeStreams function
+      const prioritizedStreams = prioritizeStreams(streams);
 
       expect(prioritizedStreams[0].id).toBe(2); // Never checked
       expect(prioritizedStreams[1].id).toBe(3); // Currently live
