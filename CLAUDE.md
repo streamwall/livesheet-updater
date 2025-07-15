@@ -4,7 +4,7 @@ This document provides comprehensive technical information about the StreamSourc
 
 ## Project Overview
 
-The StreamSource Live Checker is a Node.js service that monitors livestream URLs to detect their live/offline status and automatically archives streams that have been offline for extended periods. It replaced a Google Sheets-based system with a StreamSource API integration.
+The StreamSource Live Checker is a Node.js service that monitors livestream URLs to detect their live/offline status and automatically archives streams that have been offline for extended periods. It uses the StreamSource API for all operations.
 
 ## Architecture Details
 
@@ -241,12 +241,12 @@ Minimal container with:
    ARCHIVE_ENABLED=false npm start
    ```
 
-## Migration Notes
+## Technical Details
 
-This service replaced a Google Sheets-based system. Key changes:
-- Removed all Google Sheets dependencies
-- Added StreamSource API client
-- Maintained same checking logic
+Key features:
+- StreamSource API integration for all operations
+- Efficient rate-limited checking
+- Automatic stream archiving
 - Added archiving functionality
 - Improved error handling
 
