@@ -241,32 +241,22 @@ async function checkStatus(row, i) {
 async function batchUpdateRows(cycleStartTime) {
   if (pendingUpdates.size === 0) return;
   
-  log(`Preparing batch update for ${pendingUpdates.size} rows...`);
+  log(`Processing ${pendingUpdates.size} row updates...`);
   const nowIso = new Date().toISOString();
   
-  debug('Sheet column headers:', JSON.stringify(sheet.headerValues));
+  let updatedCount = 0;
+  let skippedCount = 0;
   
-  try {
-    // Get fresh data to avoid race conditions
-    debug('Fetching fresh sheet data before update...');
-    const freshRows = await sheet.getRows();
-    
-    // Create a map for quick lookup
-    const freshRowMap = new Map();
-    for (const row of freshRows) {
-      const url = getField(row, 'Link')?.trim();
-      if (url) freshRowMap.set(url, row);
-    }
-    
-    let updatedCount = 0;
-    let skippedCount = 0;
-    
-    // Process each pending update
-    for (const [url, { status }] of pendingUpdates) {
-      const freshRow = freshRowMap.get(url);
+  // Process each pending update individually
+  for (const [url, { status, rowIndex }] of pendingUpdates) {
+    try {
+      // Fetch fresh data - unfortunately we need to get all rows since the API doesn't support single row fetch by URL
+      // But we fetch fresh each time to minimize race condition window
+      const allRows = await sheet.getRows();
+      const freshRow = allRows.find(r => getField(r, 'Link')?.trim() === url);
       
       if (!freshRow) {
-        log(`Row deleted by user, skipping: ${url}`);
+        debug(`Row deleted by user, skipping: ${url}`);
         skippedCount++;
         continue;
       }
@@ -274,7 +264,7 @@ async function batchUpdateRows(cycleStartTime) {
       // Check if someone else updated it more recently
       const freshLastChecked = getField(freshRow, 'Last Checked (PST)');
       if (freshLastChecked && new Date(freshLastChecked).getTime() > cycleStartTime) {
-        log(`Row updated by another process, skipping: ${url}`);
+        debug(`Row updated by another process, skipping: ${url}`);
         skippedCount++;
         continue;
       }
@@ -294,33 +284,27 @@ async function batchUpdateRows(cycleStartTime) {
         updates['Added Date'] = nowIso;
       }
       
-      // Apply all updates at once
+      // Apply and save immediately
       freshRow.assign(updates);
+      await freshRow.save();
       
-      // Save this row
-      try {
-        await freshRow.save();
-        updatedCount++;
-        debug(`Updated row for ${url} - Status: ${status}`);
-      } catch (saveError) {
-        log(`ERROR saving row for ${url}: ${saveError.message}`);
-        skippedCount++;
-      }
+      updatedCount++;
+      debug(`Updated row for ${url} - Status: ${status}`);
+      
+    } catch (error) {
+      log(`ERROR updating row for ${url}: ${error.message}`);
+      skippedCount++;
     }
-    
-    // Log summary
-    if (updatedCount > 0 || skippedCount > 0) {
-      log(`Batch update complete: ${updatedCount} rows updated, ${skippedCount} skipped`);
-    } else {
-      log(`No rows to update (all were deleted or modified)`);
-    }
-    
-    pendingUpdates.clear();
-    
-  } catch (e) {
-    log(`Batch update error:`, e.message);
-    pendingUpdates.clear();
   }
+  
+  // Log summary
+  if (updatedCount > 0 || skippedCount > 0) {
+    log(`Update complete: ${updatedCount} rows updated, ${skippedCount} skipped`);
+  } else {
+    log(`No rows updated`);
+  }
+  
+  pendingUpdates.clear();
 }
 
 async function main() {
