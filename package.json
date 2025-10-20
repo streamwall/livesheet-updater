@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "google-spreadsheet": "^4.1.4",
-    "google-auth-library": "^9.15.1"
+    "dotenv": "^17.2.3",
+    "google-auth-library": "^9.15.1",
+    "google-spreadsheet": "^4.1.4"
   }
 }

@@ -1,17 +1,37 @@
+import dotenv from "dotenv";
 import fs from "fs/promises";
 import { GoogleAuth } from "google-auth-library";
 import { GoogleSpreadsheet } from "google-spreadsheet";
 
-// 🗞 Config
-const SHEET_ID = "1amkWpZu5hmI50XGINiz7-02XVNTTZoEARWEVRM-pvKo";
-const SHEET_NAME = "Livesheet";
-const RATE_LIVE = 2 * 60 * 1000;
-const RATE_OFF = 7 * 60 * 1000;
+dotenv.config();
 
-const LOOP_DELAY_MIN = 10000;
-const LOOP_DELAY_MAX = 20000;
+// 🗞 Config
+const parseInteger = (rawValue, fallback) => {
+  const parsed = Number.parseInt(rawValue, 10);
+  return Number.isNaN(parsed) ? fallback : parsed;
+};
+
+const SHEET_ID = process.env.SHEET_ID;
+if (!SHEET_ID) {
+  throw new Error("Missing SHEET_ID environment variable");
+}
+
+const SHEET_NAME = process.env.SHEET_NAME || "Livesheet";
+const RATE_LIVE = parseInteger(process.env.RATE_LIVE, 2 * 60 * 1000);
+const RATE_OFF = parseInteger(process.env.RATE_OFF, 7 * 60 * 1000);
+const CHECK_CONCURRENCY = Math.max(
+  1,
+  parseInteger(process.env.CHECK_CONCURRENCY, 6),
+);
+
+const LOOP_DELAY_MIN = parseInteger(process.env.LOOP_DELAY_MIN, 10000);
+const LOOP_DELAY_MAX = Math.max(
+  LOOP_DELAY_MIN,
+  parseInteger(process.env.LOOP_DELAY_MAX, 20000),
+);
 
 const USER_AGENT =
+  process.env.USER_AGENT ||
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -88,6 +108,32 @@ function setField(row, name, val) {
 
 // Store updates to batch them
 const pendingUpdates = new Map();
+
+function findColumnIndex(name) {
+  return sheet.headerValues.findIndex(
+    (header) =>
+      typeof header === "string" && header.toLowerCase() === name.toLowerCase(),
+  );
+}
+
+function columnLetter(index) {
+  let dividend = index + 1;
+  let column = "";
+
+  while (dividend > 0) {
+    const modulo = (dividend - 1) % 26;
+    column = String.fromCharCode(65 + modulo) + column;
+    dividend = Math.floor((dividend - modulo) / 26);
+  }
+
+  return column;
+}
+
+function sheetRangePrefix() {
+  const title = sheet.title || "Sheet1";
+  const escaped = title.replace(/'/g, "''");
+  return `'${escaped}'!`;
+}
 
 async function checkStatus(row, i) {
   const rawUrl = getField(row, "Link");
@@ -305,6 +351,32 @@ async function checkStatus(row, i) {
   }
 }
 
+async function runChecks(prioritized) {
+  if (prioritized.length === 0) return;
+
+  let nextIndex = 0;
+  const total = prioritized.length;
+  const workerCount = Math.min(CHECK_CONCURRENCY, total);
+
+  const workers = Array.from({ length: workerCount }, () =>
+    (async () => {
+      while (true) {
+        const current = nextIndex++;
+        if (current >= total) break;
+
+        const { row, i } = prioritized[current];
+        try {
+          await checkStatus(row, i);
+        } catch (error) {
+          log(`[${i}] Check error: ${error.message}`);
+        }
+      }
+    })(),
+  );
+
+  await Promise.all(workers);
+}
+
 async function batchUpdateRows(cycleStartTime) {
   if (pendingUpdates.size === 0) return;
 
@@ -314,56 +386,93 @@ async function batchUpdateRows(cycleStartTime) {
   let updatedCount = 0;
   let skippedCount = 0;
 
-  // Process each pending update individually
-  for (const [url, { status, rowIndex }] of pendingUpdates) {
-    try {
-      // Fetch fresh data - unfortunately we need to get all rows since the API doesn't support single row fetch by URL
-      // But we fetch fresh each time to minimize race condition window
-      const allRows = await sheet.getRows();
-      const freshRow = allRows.find((r) => getField(r, "Link")?.trim() === url);
+  const allRows = await sheet.getRows();
+  const rowsByUrl = new Map();
 
-      if (!freshRow) {
-        debug(`Row deleted by user, skipping: ${url}`);
-        skippedCount++;
-        continue;
-      }
+  for (const freshRow of allRows) {
+    const link = getField(freshRow, "Link");
+    if (!link) continue;
+    const trimmedLink = link.trim();
 
-      // Check if someone else updated it more recently
-      const freshLastChecked = getField(freshRow, "Last Checked (PST)");
-      if (
-        freshLastChecked &&
-        new Date(freshLastChecked).getTime() > cycleStartTime
-      ) {
-        debug(`Row updated by another process, skipping: ${url}`);
-        skippedCount++;
-        continue;
-      }
-
-      // Build update object
-      const updates = {
-        Status: status,
-        "Last Checked (PST)": nowIso,
-      };
-
-      if (status === "Live") {
-        updates["Last Live (PST)"] = nowIso;
-      }
-
-      const addedDate = getField(freshRow, "Added Date");
-      if (!addedDate) {
-        updates["Added Date"] = nowIso;
-      }
-
-      // Apply and save immediately
-      freshRow.assign(updates);
-      await freshRow.save();
-
-      updatedCount++;
-      debug(`Updated row for ${url} - Status: ${status}`);
-    } catch (error) {
-      log(`ERROR updating row for ${url}: ${error.message}`);
-      skippedCount++;
+    if (!rowsByUrl.has(trimmedLink)) {
+      rowsByUrl.set(trimmedLink, freshRow);
+    } else if (process.env.DEBUG) {
+      debug(`Duplicate link detected for batching: ${trimmedLink}`);
     }
+  }
+
+  const statusIdx = findColumnIndex("Status");
+  const lastCheckedIdx = findColumnIndex("Last Checked (PST)");
+  const lastLiveIdx = findColumnIndex("Last Live (PST)");
+  const addedIdx = findColumnIndex("Added Date");
+
+  if (statusIdx === -1 || lastCheckedIdx === -1) {
+    throw new Error(
+      "Missing required columns for batch update (Status, Last Checked (PST))",
+    );
+  }
+
+  const updates = [];
+  const skippedUrls = [];
+  const prefix = sheetRangePrefix();
+
+  for (const [url, { status }] of pendingUpdates) {
+    const freshRow = rowsByUrl.get(url.trim());
+
+    if (!freshRow) {
+      skippedUrls.push(url);
+      skippedCount++;
+      continue;
+    }
+
+    const freshLastChecked = getField(freshRow, "Last Checked (PST)");
+    if (
+      freshLastChecked &&
+      new Date(freshLastChecked).getTime() > cycleStartTime
+    ) {
+      skippedUrls.push(url);
+      skippedCount++;
+      continue;
+    }
+
+    const rowNumber = freshRow.rowNumber;
+
+    const statusRange = `${prefix}${columnLetter(statusIdx)}${rowNumber}`;
+    updates.push({ range: statusRange, values: [[status]] });
+
+    const checkedRange = `${prefix}${columnLetter(lastCheckedIdx)}${rowNumber}`;
+    updates.push({ range: checkedRange, values: [[nowIso]] });
+
+    if (lastLiveIdx !== -1) {
+      const liveRange = `${prefix}${columnLetter(lastLiveIdx)}${rowNumber}`;
+      const previousLastLive = getField(freshRow, "Last Live (PST)");
+      const liveValue = status === "Live" ? nowIso : previousLastLive || "";
+      updates.push({ range: liveRange, values: [[liveValue]] });
+    }
+
+    if (addedIdx !== -1 && !getField(freshRow, "Added Date")) {
+      const addedRange = `${prefix}${columnLetter(addedIdx)}${rowNumber}`;
+      updates.push({ range: addedRange, values: [[nowIso]] });
+    }
+
+    updatedCount++;
+  }
+
+  if (updates.length > 0) {
+    const payload = {
+      data: updates,
+      valueInputOption: "USER_ENTERED",
+    };
+
+    await client.request({
+      url: `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values:batchUpdate`,
+      method: "post",
+      data: payload,
+    });
+  }
+
+  if (skippedUrls.length > 0) {
+    debug(`Skipped batch updates for URLs: ${skippedUrls.join(", ")}`);
   }
 
   // Log summary
@@ -417,10 +526,8 @@ async function main() {
         );
       }
 
-      // Check all streams
-      for (const { row, i } of prioritized) {
-        await checkStatus(row, i);
-      }
+      // Check all streams with controlled concurrency to reduce total cycle time
+      await runChecks(prioritized);
 
       // Batch update all pending changes with race condition protection
       await batchUpdateRows(cycleStartTime);
